@@ -1,9 +1,9 @@
 import os
 from .fingerprint import folder_fingerprint
 
-LEAF_MAX = 40
-MAX_DEPTH = 8
-MAX_NODES = 20000
+LEAF_MAX = int(os.getenv("KG_LEAF_MAX", "40"))
+MAX_DEPTH = int(os.getenv("KG_MAX_DEPTH", "8"))   # overview indexes use a shallow cap (e.g. 4)
+MAX_NODES = int(os.getenv("KG_MAX_NODES", "20000"))
 MARKERS = {".git", "README.md", "README", "package.json", "pyproject.toml",
            "requirements.txt", "docker-compose.yml", "Cargo.toml", "go.mod"}
 # Dev/build noise we never descend into or make nodes for — they explode the
