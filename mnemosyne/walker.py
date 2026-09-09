@@ -1,4 +1,5 @@
 import os
+from .fingerprint import folder_fingerprint
 
 LEAF_MAX = 40
 MAX_DEPTH = 8
@@ -45,7 +46,6 @@ def classify(path, dirs, files):
     return "branch", "folder"
 
 def walk(root, box, vault_pred=None, fp=None):
-    from .fingerprint import folder_fingerprint
     fpf = fp or folder_fingerprint
     root = os.path.abspath(root)
     count = 0
@@ -70,10 +70,10 @@ def walk(root, box, vault_pred=None, fp=None):
         dirs, files = _list(path)
         flag, kind = classify(path, dirs, files)
         yield {"id": nid, "box": box, "kind": kind, "path": path, "name": name,
-               "fingerprint": fpf(path), "size": 0, "mtime": int(st.st_mtime),
+               "fingerprint": fpf(path), "size": st.st_size, "mtime": int(st.st_mtime),
                "meta": {"n_dirs": len(dirs), "n_files": len(files), "ext": _ext_hist(files)},
                "parent": parent}
         count += 1
-        if flag == "branch" and depth < MAX_DEPTH:
+        if flag == "branch":
             for d in dirs:
                 stack.append((os.path.join(path, d), nid, depth + 1))
