@@ -1,6 +1,7 @@
 import os
 from mnemosyne.store import Store
 from mnemosyne.collect import collect
+from mnemosyne import walker
 
 def build_tree(root):
     os.makedirs(os.path.join(root, "projA", "src"))
@@ -39,3 +40,19 @@ def test_collect_regenerates_changed_folder(tmp_path):
     open(os.path.join(str(tmp_path), "projA", "NEW.txt"), "w").write("z")
     res = collect(st, str(tmp_path), "ARES", gen=gen)
     assert res["changed"] >= 1                      # projA fingerprint changed
+
+def test_collect_vault_not_summarized(tmp_path):
+    v = tmp_path / "My Eyes Only"
+    (v / "secret").mkdir(parents=True)
+    (v / "secret" / "d.txt").write_text("x")
+    (tmp_path / "readme.txt").write_text("hi")
+    st = Store(str(tmp_path / "kg.db"))
+    calls = []
+    def gen(node, kids):
+        calls.append(node["path"]); return "u"
+    collect(st, str(tmp_path), "ARES", vault_pred=walker.default_vault_pred(), gen=gen)
+    vnode = st.get_node("ARES:" + str(v))
+    assert vnode["kind"] == "vault"
+    assert vnode["understanding"] == "Encrypted vault — contents not indexed."
+    assert not any("My Eyes Only" in p for p in calls)   # gen never called for the vault
+    st.close()

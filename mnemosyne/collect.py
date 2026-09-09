@@ -16,7 +16,7 @@ def collect(store, root, box="ARES", vault_pred=None, gen=None):
     changed = 0
     for n in order:
         prev = store.get_node(n["id"])
-        kids = [understandings.get(c) or (by_id[c].get("understanding")) for c in children.get(n["id"], [])]
+        kids = [understandings.get(c) for c in children.get(n["id"], [])]
         kids = [k for k in kids if k]
         if prev and prev.get("fingerprint") == n["fingerprint"]:
             u = prev.get("understanding")
