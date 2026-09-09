@@ -46,3 +46,15 @@ def test_vault_is_name_only_and_not_descended(tmp_path):
     assert v["understanding"] == "Encrypted vault — contents not indexed."
     # nothing under the vault was walked
     assert not any("secret" in p for p in paths)
+
+
+def test_walk_skips_ignore_dirs(tmp_path):
+    import os
+    from mnemosyne import walker
+    os.makedirs(os.path.join(str(tmp_path), "proj", "node_modules", "left-pad"))
+    os.makedirs(os.path.join(str(tmp_path), "proj", "src"))
+    open(os.path.join(str(tmp_path), "proj", "package.json"), "w").write("{}")
+    nodes = list(walker.walk(str(tmp_path), "ARES"))
+    paths = [n["path"] for n in nodes]
+    assert any(p.endswith(os.sep + "src") for p in paths)
+    assert not any("node_modules" in p for p in paths)

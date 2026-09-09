@@ -6,6 +6,13 @@ MAX_DEPTH = 8
 MAX_NODES = 20000
 MARKERS = {".git", "README.md", "README", "package.json", "pyproject.toml",
            "requirements.txt", "docker-compose.yml", "Cargo.toml", "go.mod"}
+# Dev/build noise we never descend into or make nodes for — they explode the
+# graph with thousands of meaningless folders (node_modules, .git internals…).
+IGNORE_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__",
+               ".pytest_cache", ".mypy_cache", ".tox", "dist", "build", ".next",
+               ".nuxt", ".output", ".turbo", ".cache", ".parcel-cache", "coverage",
+               ".idea", ".vscode", "target", "vendor", "bower_components", ".svn",
+               ".terraform", ".gradle", "__snapshots__", ".ipynb_checkpoints"}
 
 def node_id(box, path):
     return f"{box}:{path}"
@@ -76,6 +83,8 @@ def walk(root, box, vault_pred=None, fp=None):
         count += 1
         if flag == "branch":
             for d in dirs:
+                if d in IGNORE_DIRS:
+                    continue
                 stack.append((os.path.join(path, d), nid, depth + 1))
 
 def default_vault_pred():
