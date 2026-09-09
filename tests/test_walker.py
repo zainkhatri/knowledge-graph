@@ -32,3 +32,17 @@ def test_walk_adaptive_depth(tmp_path):
     # ids and parent links
     assert by_path[os.path.join(str(tmp_path), "projA")]["id"] == "ARES:" + os.path.join(str(tmp_path), "projA")
     assert by_path[os.path.join(str(tmp_path), "projA", "src")]["parent"] == "ARES:" + os.path.join(str(tmp_path), "projA")
+
+def test_vault_is_name_only_and_not_descended(tmp_path):
+    import os
+    vault = tmp_path / "My Eyes Only"
+    (vault / "secret").mkdir(parents=True)
+    (vault / "secret" / "diary.txt").write_text("private")
+    from mnemosyne import walker
+    nodes = list(walker.walk(str(tmp_path), "ARES", vault_pred=walker.default_vault_pred()))
+    paths = {n["path"]: n for n in nodes}
+    v = paths[str(vault)]
+    assert v["kind"] == "vault"
+    assert v["understanding"] == "Encrypted vault — contents not indexed."
+    # nothing under the vault was walked
+    assert not any("secret" in p for p in paths)

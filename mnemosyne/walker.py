@@ -77,3 +77,11 @@ def walk(root, box, vault_pred=None, fp=None):
         if flag == "branch":
             for d in dirs:
                 stack.append((os.path.join(path, d), nid, depth + 1))
+
+def default_vault_pred():
+    pats = [p.strip().lower() for p in
+            os.getenv("VAULT_PATHS", "my eyes only,/vault,vault-secure").split(",") if p.strip()]
+    def pred(path):
+        pl = path.lower()
+        return any(p in pl for p in pats)
+    return pred
