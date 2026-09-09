@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+ROOT="/mnt/nvme/PROMETHEUS/PROJECTS/mnemosyne"
+exec env PYTHONPATH="$ROOT" python3 "$ROOT/mcp_server.py" "$@"
