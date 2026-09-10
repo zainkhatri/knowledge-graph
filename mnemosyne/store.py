@@ -72,5 +72,30 @@ class Store:
             " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?", (query, limit)).fetchall()
         return [self._row(r) for r in rows]
 
+    def merge_from(self, other_path, box):
+        src = sqlite3.connect(f"file:{other_path}?mode=ro", uri=True)
+        src.row_factory = sqlite3.Row
+        keep = set()
+        try:
+            for r in src.execute("SELECT id,box,kind,path,name,understanding,fingerprint,"
+                                  "size,mtime,status,meta FROM nodes").fetchall():
+                self.upsert_node({"id": r["id"], "box": r["box"], "kind": r["kind"], "path": r["path"],
+                                  "name": r["name"], "understanding": r["understanding"],
+                                  "fingerprint": r["fingerprint"], "size": r["size"], "mtime": r["mtime"],
+                                  "status": r["status"] or "live", "meta": json.loads(r["meta"] or "{}")})
+                keep.add(r["id"])
+            for e in src.execute("SELECT src,dst,type,meta FROM edges").fetchall():
+                self.add_edge(e["src"], e["dst"], e["type"], json.loads(e["meta"] or "{}"))
+        finally:
+            src.close()
+        stale = [r["id"] for r in self.db.execute("SELECT id FROM nodes WHERE box=?", (box,)).fetchall()
+                 if r["id"] not in keep]
+        with self.db:
+            for nid in stale:
+                self.db.execute("DELETE FROM nodes WHERE id=?", (nid,))
+                self.db.execute("DELETE FROM nodes_fts WHERE id=?", (nid,))
+                self.db.execute("DELETE FROM edges WHERE src=? OR dst=?", (nid, nid))
+        return {"merged": len(keep), "pruned": len(stale)}
+
     def close(self):
         self.db.close()
