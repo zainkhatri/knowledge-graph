@@ -32,3 +32,11 @@ def test_merge_is_idempotent(tmp_path):
     res2 = central.merge_from(str(tmp_path / "e.db"), "EROS")
     assert res2 == {"merged": 1, "pruned": 0}
     central.close()
+
+def test_cli_merge(tmp_path, monkeypatch, capsys):
+    from mnemosyne import cli
+    other = Store(str(tmp_path / "e.db")); _seed(other, "EROS", ["/x"]); other.close()
+    monkeypatch.setenv("KG_DB", str(tmp_path / "central.db"))
+    cli.main(["merge", str(tmp_path / "e.db"), "--box", "EROS"])
+    out = capsys.readouterr().out
+    assert "'merged': 1" in out
