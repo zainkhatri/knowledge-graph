@@ -24,6 +24,7 @@ def main(argv=None):
     tr = sub.add_parser("tree"); tr.add_argument("id"); tr.add_argument("--depth", type=int, default=2)
     rx = sub.add_parser("reindex"); rx.add_argument("root"); rx.add_argument("--box", default="ARES")
     mg = sub.add_parser("merge"); mg.add_argument("other"); mg.add_argument("--box", required=True)
+    sub.add_parser("link-boxes")
     sub.add_parser("stat")
     a = ap.parse_args(argv)
     st = Store(_db_path())
@@ -43,6 +44,9 @@ def main(argv=None):
             print(collect(st, a.root, a.box))
         elif a.cmd == "merge":
             print(st.merge_from(a.other, a.box))
+        elif a.cmd == "link-boxes":
+            from .link import link_boxes
+            print(link_boxes(st))
         elif a.cmd == "stat":
             c = st.db.execute("SELECT count(*) c FROM nodes").fetchone()["c"]
             e = st.db.execute("SELECT count(*) c FROM edges").fetchone()["c"]
