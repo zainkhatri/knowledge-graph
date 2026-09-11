@@ -144,7 +144,7 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
     return {"chats": chats, "project_linked": linked, "summarized": summarized, "hub": hub_id}
 
 
-def summarize_pending(store, budget=500, kinds=("chat", "gpt-chat")):
+def summarize_pending(store, budget=500, kinds=("chat", "gpt-chat", "claude-chat")):
     """Generate Ollama summaries for chat/gpt nodes still marked status='raw', from the
     asks stored in meta — so it works for ANY box (ZEUS chats included) without the source
     file. Bounded by budget; run nightly to spread a big backfill across days."""

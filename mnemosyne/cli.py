@@ -31,6 +31,8 @@ def main(argv=None):
     ig = sub.add_parser("index-gpt"); ig.add_argument("--box", default="ARES")
     ig.add_argument("--dir", default="/mnt/nvme/PROMETHEUS/PERSONAL/GPT")
     ig.add_argument("--summary-budget", type=int, default=None)
+    iw = sub.add_parser("index-claude-web"); iw.add_argument("--box", default="ARES")
+    iw.add_argument("--dir", required=True); iw.add_argument("--summary-budget", type=int, default=None)
     sm = sub.add_parser("summarize-pending"); sm.add_argument("--budget", type=int, default=500)
     sub.add_parser("stat")
     a = ap.parse_args(argv)
@@ -60,6 +62,9 @@ def main(argv=None):
         elif a.cmd == "index-gpt":
             from .gpt import index_gpt
             print(index_gpt(st, a.dir, a.box, summary_budget=a.summary_budget))
+        elif a.cmd == "index-claude-web":
+            from .claude_web import index_claude_web
+            print(index_claude_web(st, a.dir, a.box, summary_budget=a.summary_budget))
         elif a.cmd == "summarize-pending":
             from .chats import summarize_pending
             print(summarize_pending(st, a.budget))
