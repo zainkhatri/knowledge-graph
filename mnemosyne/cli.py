@@ -27,6 +27,11 @@ def main(argv=None):
     sub.add_parser("link-boxes")
     ic = sub.add_parser("index-chats"); ic.add_argument("--box", default="ARES")
     ic.add_argument("--root", default="/root/.claude/projects")
+    ic.add_argument("--summary-budget", type=int, default=None)
+    ig = sub.add_parser("index-gpt"); ig.add_argument("--box", default="ARES")
+    ig.add_argument("--dir", default="/mnt/nvme/PROMETHEUS/PERSONAL/GPT")
+    ig.add_argument("--summary-budget", type=int, default=None)
+    sm = sub.add_parser("summarize-pending"); sm.add_argument("--budget", type=int, default=500)
     sub.add_parser("stat")
     a = ap.parse_args(argv)
     st = Store(_db_path())
@@ -51,7 +56,13 @@ def main(argv=None):
             print(link_boxes(st))
         elif a.cmd == "index-chats":
             from .chats import index_chats
-            print(index_chats(st, a.root, a.box))
+            print(index_chats(st, a.root, a.box, summary_budget=a.summary_budget))
+        elif a.cmd == "index-gpt":
+            from .gpt import index_gpt
+            print(index_gpt(st, a.dir, a.box, summary_budget=a.summary_budget))
+        elif a.cmd == "summarize-pending":
+            from .chats import summarize_pending
+            print(summarize_pending(st, a.budget))
         elif a.cmd == "stat":
             c = st.db.execute("SELECT count(*) c FROM nodes").fetchone()["c"]
             e = st.db.execute("SELECT count(*) c FROM edges").fetchone()["c"]

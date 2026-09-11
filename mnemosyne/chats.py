@@ -11,6 +11,8 @@ Bounded + stdlib-only. Reads only the head of each transcript (even 70MB ones).
 import os, glob, json, time
 
 HUB_PATH = "/mnt/nvme/PROMETHEUS/CLAUDE-CHATS"
+# candidate box-root node paths to hang the chats hub under (best-effort)
+ROOT_CANDS = ["/mnt/nvme/PROMETHEUS", "/srv/mergerfs/PROMETHEUS", "/srv", "/root"]
 
 
 def _iter_head(path, max_lines=400):
@@ -86,17 +88,21 @@ def _anchor(store, box, cwd):
     return None
 
 
-def index_chats(store, projects_root="/root/.claude/projects", box="ARES", summarize=True):
+def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
+                summarize=True, summary_budget=None):
+    """summary_budget: max NEW Ollama summaries to generate this run (None = unlimited).
+    Chats over budget are still indexed with the raw-asks fallback and get summarized on a
+    later run (fingerprint change-detection). Lets a big backfill spread across nights."""
     hub_id = f"{box}:chats"
     store.upsert_node({
-        "id": hub_id, "box": box, "kind": "folder", "path": HUB_PATH,
-        "name": "Claude Code Chats",
+        "id": hub_id, "box": box, "kind": "folder", "path": f"/{box}/CLAUDE-CHATS",
+        "name": f"Claude Code Chats ({box})",
         "understanding": "Indexed Claude Code conversation transcripts — searchable session context "
-                         "across every project on this box.",
+                         f"across every project on {box}.",
     })
-    root_id = f"{box}:/mnt/nvme/PROMETHEUS"
-    if store.get_node(root_id):
-        store.add_edge(root_id, hub_id, "contains")
+    for cand in ROOT_CANDS:
+        if store.get_node(f"{box}:{cand}"):
+            store.add_edge(f"{box}:{cand}", hub_id, "contains"); break
 
     files = glob.glob(os.path.join(projects_root, "*", "*.jsonl"))
     chats = linked = summarized = 0
@@ -113,22 +119,20 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES", summa
         except Exception:
             mt = None; fp = None
         cid = f"{box}:chat/{sid}"
-        und = (summary or " · ".join(asks) or "")[:700]    # fallback: raw asks
-        fingerprint = None
-        if summarize:
-            prev = store.get_node(cid)
-            if prev and fp and prev.get("fingerprint") == fp and prev.get("understanding"):
-                und = prev["understanding"]; fingerprint = fp     # unchanged → keep existing summary
-            else:
-                from .understanding import summarize_chat
-                s = summarize_chat(asks)
-                if s:
-                    und = s; fingerprint = fp; summarized += 1     # got a fresh Ollama summary
-                # else: keep fallback, leave fingerprint None so it retries next run
+        und = (summary or " · ".join(asks) or "")[:700]    # fallback: raw asks (searchable now)
+        status = "raw"                                       # raw = not yet Ollama-summarized
+        prev = store.get_node(cid)
+        if prev and fp and prev.get("fingerprint") == fp and prev.get("status") == "live":
+            und = prev["understanding"]; status = "live"     # unchanged + already summarized → keep
+        elif summarize and (summary_budget is None or summarized < summary_budget):
+            from .understanding import summarize_chat
+            s = summarize_chat(asks)
+            if s:
+                und = s; status = "live"; summarized += 1
         store.upsert_node({
             "id": cid, "box": box, "kind": "chat", "path": path, "name": name,
-            "understanding": und, "mtime": mt, "fingerprint": fingerprint,
-            "meta": {"session": sid, "cwd": cwd or "", "turns": len(asks)},
+            "understanding": und, "mtime": mt, "fingerprint": fp, "status": status,
+            "meta": {"session": sid, "cwd": cwd or "", "turns": len(asks), "asks": asks[:6]},
         })
         store.add_edge(hub_id, cid, "contains")
         a = _anchor(store, box, cwd)
@@ -138,3 +142,34 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES", summa
         chats += 1
     store.db.commit()
     return {"chats": chats, "project_linked": linked, "summarized": summarized, "hub": hub_id}
+
+
+def summarize_pending(store, budget=500, kinds=("chat", "gpt-chat")):
+    """Generate Ollama summaries for chat/gpt nodes still marked status='raw', from the
+    asks stored in meta — so it works for ANY box (ZEUS chats included) without the source
+    file. Bounded by budget; run nightly to spread a big backfill across days."""
+    import json as _json
+    from .understanding import summarize_chat, gpu_on_loan
+    if gpu_on_loan():
+        return {"summarized": 0, "note": "gpu-on-loan"}
+    ph = ",".join("?" * len(kinds))
+    rows = store.db.execute(
+        f"SELECT id, name, meta FROM nodes WHERE status='raw' AND kind IN ({ph}) LIMIT ?",
+        (*kinds, int(budget))).fetchall()
+    done = 0
+    for r in rows:
+        asks = (_json.loads(r["meta"] or "{}")).get("asks") or []
+        if not asks:
+            continue
+        s = summarize_chat(asks)
+        if not s:
+            continue
+        with store.db:
+            store.db.execute("UPDATE nodes SET understanding=?, status='live' WHERE id=?", (s, r["id"]))
+            store.db.execute("DELETE FROM nodes_fts WHERE id=?", (r["id"],))
+            store.db.execute("INSERT INTO nodes_fts(id,name,understanding) VALUES(?,?,?)",
+                             (r["id"], r["name"], s))
+        done += 1
+    remaining = store.db.execute(
+        f"SELECT count(*) c FROM nodes WHERE status='raw' AND kind IN ({ph})", kinds).fetchone()["c"]
+    return {"summarized": done, "still_raw": remaining}
