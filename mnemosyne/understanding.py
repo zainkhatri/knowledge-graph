@@ -28,6 +28,27 @@ def _http_post(url, data):
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode())
 
+def build_chat_prompt(asks):
+    joined = "\n- ".join(a[:220] for a in (asks or [])[:8])
+    return (
+        "You are cataloguing a homelab's Claude Code session history. In ONE or TWO sentences, "
+        "summarize what this coding/ops session was about — the goal and the main topics worked on. "
+        "Be concrete and factual. No preamble, no bullet points, no 'the user'.\n"
+        f"The requests made in the session:\n- {joined}\n"
+    )
+
+def summarize_chat(asks, http=None):
+    if gpu_on_loan() or not asks:
+        return None
+    payload = json.dumps({"model": OLLAMA_MODEL, "prompt": build_chat_prompt(asks),
+                          "stream": False, "options": {"temperature": 0.2}}).encode()
+    caller = http or _http_post
+    try:
+        resp = caller(f"{OLLAMA_HOST}/api/generate", payload)
+        return ((resp.get("response") or "").strip()[:400]) or None
+    except Exception:
+        return None
+
 def generate(node, children_understandings=None, http=None):
     if node.get("kind") == "vault":
         return "Encrypted vault — contents not indexed."

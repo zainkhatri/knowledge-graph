@@ -86,7 +86,7 @@ def _anchor(store, box, cwd):
     return None
 
 
-def index_chats(store, projects_root="/root/.claude/projects", box="ARES"):
+def index_chats(store, projects_root="/root/.claude/projects", box="ARES", summarize=True):
     hub_id = f"{box}:chats"
     store.upsert_node({
         "id": hub_id, "box": box, "kind": "folder", "path": HUB_PATH,
@@ -99,7 +99,7 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES"):
         store.add_edge(root_id, hub_id, "contains")
 
     files = glob.glob(os.path.join(projects_root, "*", "*.jsonl"))
-    chats = linked = 0
+    chats = linked = summarized = 0
     for path in files:
         sid = os.path.splitext(os.path.basename(path))[0]
         cwd, ts, asks, summary = _summarize(path)
@@ -108,15 +108,26 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES"):
         date = _date(path, ts)
         first = (asks[0] if asks else summary) or "chat"
         name = (f"{date} · " if date else "") + first[:70]
-        und = (summary or " · ".join(asks) or "")[:700]
         try:
-            mt = int(os.path.getmtime(path))
+            st = os.stat(path); mt = int(st.st_mtime); fp = f"{mt}:{st.st_size}"
         except Exception:
-            mt = None
+            mt = None; fp = None
         cid = f"{box}:chat/{sid}"
+        und = (summary or " · ".join(asks) or "")[:700]    # fallback: raw asks
+        fingerprint = None
+        if summarize:
+            prev = store.get_node(cid)
+            if prev and fp and prev.get("fingerprint") == fp and prev.get("understanding"):
+                und = prev["understanding"]; fingerprint = fp     # unchanged → keep existing summary
+            else:
+                from .understanding import summarize_chat
+                s = summarize_chat(asks)
+                if s:
+                    und = s; fingerprint = fp; summarized += 1     # got a fresh Ollama summary
+                # else: keep fallback, leave fingerprint None so it retries next run
         store.upsert_node({
             "id": cid, "box": box, "kind": "chat", "path": path, "name": name,
-            "understanding": und, "mtime": mt,
+            "understanding": und, "mtime": mt, "fingerprint": fingerprint,
             "meta": {"session": sid, "cwd": cwd or "", "turns": len(asks)},
         })
         store.add_edge(hub_id, cid, "contains")
@@ -126,4 +137,4 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES"):
             linked += 1
         chats += 1
     store.db.commit()
-    return {"chats": chats, "project_linked": linked, "hub": hub_id}
+    return {"chats": chats, "project_linked": linked, "summarized": summarized, "hub": hub_id}
