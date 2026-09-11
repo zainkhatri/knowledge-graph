@@ -25,6 +25,8 @@ def main(argv=None):
     rx = sub.add_parser("reindex"); rx.add_argument("root"); rx.add_argument("--box", default="ARES")
     mg = sub.add_parser("merge"); mg.add_argument("other"); mg.add_argument("--box", required=True)
     sub.add_parser("link-boxes")
+    ic = sub.add_parser("index-chats"); ic.add_argument("--box", default="ARES")
+    ic.add_argument("--root", default="/root/.claude/projects")
     sub.add_parser("stat")
     a = ap.parse_args(argv)
     st = Store(_db_path())
@@ -47,6 +49,9 @@ def main(argv=None):
         elif a.cmd == "link-boxes":
             from .link import link_boxes
             print(link_boxes(st))
+        elif a.cmd == "index-chats":
+            from .chats import index_chats
+            print(index_chats(st, a.root, a.box))
         elif a.cmd == "stat":
             c = st.db.execute("SELECT count(*) c FROM nodes").fetchone()["c"]
             e = st.db.execute("SELECT count(*) c FROM edges").fetchone()["c"]
