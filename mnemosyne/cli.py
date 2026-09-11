@@ -33,6 +33,8 @@ def main(argv=None):
     ig.add_argument("--summary-budget", type=int, default=None)
     iw = sub.add_parser("index-claude-web"); iw.add_argument("--box", default="ARES")
     iw.add_argument("--dir", required=True); iw.add_argument("--summary-budget", type=int, default=None)
+    ie = sub.add_parser("index-env"); ie.add_argument("--box", default="ARES")
+    ie.add_argument("--home", default="/root/.claude"); ie.add_argument("--config", default="/root/.claude.json")
     sm = sub.add_parser("summarize-pending"); sm.add_argument("--budget", type=int, default=500)
     sub.add_parser("stat")
     a = ap.parse_args(argv)
@@ -65,6 +67,9 @@ def main(argv=None):
         elif a.cmd == "index-claude-web":
             from .claude_web import index_claude_web
             print(index_claude_web(st, a.dir, a.box, summary_budget=a.summary_budget))
+        elif a.cmd == "index-env":
+            from .env import index_env
+            print(index_env(st, a.box, a.home, a.config))
         elif a.cmd == "summarize-pending":
             from .chats import summarize_pending
             print(summarize_pending(st, a.budget))
