@@ -69,7 +69,7 @@ def main(argv=None):
             print(index_claude_web(st, a.dir, a.box, summary_budget=a.summary_budget))
         elif a.cmd == "index-env":
             from .env import index_env
-            print(index_env(st, a.box, a.home, a.config))
+            print(index_env(st, a.box, [a.home, "/mnt/nvme/PROMETHEUS/.claude"], a.config))
         elif a.cmd == "summarize-pending":
             from .chats import summarize_pending
             print(summarize_pending(st, a.budget))

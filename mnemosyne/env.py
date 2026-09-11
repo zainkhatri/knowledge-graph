@@ -114,7 +114,35 @@ def index_mcps(store, box="ARES", claude_json="/root/.claude.json"):
     return {"mcps": n, "connected_account_connectors": len(acct)}
 
 
-def index_env(store, box="ARES", claude_home="/root/.claude", claude_json="/root/.claude.json"):
-    r = index_skills(store, box, claude_home)
-    r.update(index_mcps(store, box, claude_json))
-    return r
+def index_agents(store, box="ARES", claude_home="/root/.claude"):
+    hub = f"{box}:agents"
+    store.upsert_node({"id": hub, "box": box, "kind": "folder", "path": f"/{box}/AGENTS",
+        "name": "Sub-Agents",
+        "understanding": "Custom Claude sub-agent types available on this box (incl. ruflo swarm/SPARC agents)."})
+    n = 0
+    paths = glob.glob(f"{claude_home}/agents/*.md") + \
+            glob.glob(f"{claude_home}/plugins/**/agents/*.md", recursive=True)
+    for path in paths:
+        name, desc = _frontmatter(path)
+        if not name:
+            continue
+        nid = f"{box}:agent/{name}"
+        store.upsert_node({"id": nid, "box": box, "kind": "agent", "path": path,
+            "name": name, "understanding": (desc or name)[:700], "status": "live",
+            "meta": {"source": "agent"}})
+        store.add_edge(hub, nid, "contains")
+        n += 1
+    store.db.commit()
+    return {"agents": n}
+
+
+def index_env(store, box="ARES", homes=None, claude_json="/root/.claude.json"):
+    homes = homes or ["/root/.claude", "/mnt/nvme/PROMETHEUS/.claude"]
+    tot = {"skills": 0, "agents": 0}
+    for h in homes:
+        if not os.path.isdir(h):
+            continue
+        tot["skills"] += index_skills(store, box, h).get("skills", 0)
+        tot["agents"] += index_agents(store, box, h).get("agents", 0)
+    tot.update(index_mcps(store, box, claude_json))
+    return tot
