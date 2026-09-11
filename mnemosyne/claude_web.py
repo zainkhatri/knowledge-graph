@@ -64,17 +64,21 @@ def index_claude_web(store, root, box="ARES", summarize=True, summary_budget=Non
             date = _date(convo.get("created_at"))
             nid = f"{box}:claude/{cid}"
             name = (f"{date} · " if date else "") + title[:70]
-            und = (title + (" · " + " · ".join(asks) if asks else ""))[:700]
             fpr = f"n{len(msgs)}"
             status = "raw"
-            prev = store.get_node(nid)
-            if prev and prev.get("fingerprint") == fpr and prev.get("status") == "live":
-                und = prev["understanding"]; status = "live"
-            elif summarize and (summary_budget is None or summarized < summary_budget):
-                from .understanding import summarize_chat
-                s = summarize_chat([title] + asks)
-                if s:
-                    und = s; status = "live"; summarized += 1
+            csum = (convo.get("summary") or "").strip()      # Claude's export ships its own summary
+            und = (csum or title + (" · " + " · ".join(asks) if asks else ""))[:700]
+            if csum:
+                status = "live"                               # already summarized by Claude — no Ollama
+            else:
+                prev = store.get_node(nid)
+                if prev and prev.get("fingerprint") == fpr and prev.get("status") == "live":
+                    und = prev["understanding"]; status = "live"
+                elif summarize and (summary_budget is None or summarized < summary_budget):
+                    from .understanding import summarize_chat
+                    s = summarize_chat([title] + asks)
+                    if s:
+                        und = s; status = "live"; summarized += 1
             store.upsert_node({
                 "id": nid, "box": box, "kind": "claude-chat",
                 "path": os.path.join(root, str(cid)), "name": name,
