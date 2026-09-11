@@ -12,8 +12,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, name, unde
 
 class Store:
     def __init__(self, path):
-        self.db = sqlite3.connect(path)
+        self.db = sqlite3.connect(path, timeout=60)
         self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA busy_timeout=60000")   # wait, don't fail, on concurrent writers
+        self.db.execute("PRAGMA journal_mode=WAL")      # readers don't block the writer
         self.db.executescript(SCHEMA)
 
     @staticmethod
