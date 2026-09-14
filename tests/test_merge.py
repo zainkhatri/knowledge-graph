@@ -1,4 +1,4 @@
-from mnemosyne.store import Store
+from atlas.store import Store
 
 def _seed(st, box, paths):
     for p in paths:
@@ -34,7 +34,7 @@ def test_merge_is_idempotent(tmp_path):
     central.close()
 
 def test_cli_merge(tmp_path, monkeypatch, capsys):
-    from mnemosyne import cli
+    from atlas import cli
     other = Store(str(tmp_path / "e.db")); _seed(other, "EROS", ["/x"]); other.close()
     monkeypatch.setenv("KG_DB", str(tmp_path / "central.db"))
     cli.main(["merge", str(tmp_path / "e.db"), "--box", "EROS"])

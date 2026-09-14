@@ -1,7 +1,7 @@
 import os
-from mnemosyne.store import Store
-from mnemosyne.collect import collect
-from mnemosyne import walker
+from atlas.store import Store
+from atlas.collect import collect
+from atlas import walker
 
 def build_tree(root):
     os.makedirs(os.path.join(root, "projA", "src"))

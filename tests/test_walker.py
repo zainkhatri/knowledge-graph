@@ -1,5 +1,5 @@
 import os
-from mnemosyne import walker
+from atlas import walker
 
 def build_tree(root):
     # root/
@@ -38,7 +38,7 @@ def test_vault_is_name_only_and_not_descended(tmp_path):
     vault = tmp_path / "My Eyes Only"
     (vault / "secret").mkdir(parents=True)
     (vault / "secret" / "diary.txt").write_text("private")
-    from mnemosyne import walker
+    from atlas import walker
     nodes = list(walker.walk(str(tmp_path), "ARES", vault_pred=walker.default_vault_pred()))
     paths = {n["path"]: n for n in nodes}
     v = paths[str(vault)]
@@ -50,7 +50,7 @@ def test_vault_is_name_only_and_not_descended(tmp_path):
 
 def test_walk_skips_ignore_dirs(tmp_path):
     import os
-    from mnemosyne import walker
+    from atlas import walker
     os.makedirs(os.path.join(str(tmp_path), "proj", "node_modules", "left-pad"))
     os.makedirs(os.path.join(str(tmp_path), "proj", "src"))
     open(os.path.join(str(tmp_path), "proj", "package.json"), "w").write("{}")

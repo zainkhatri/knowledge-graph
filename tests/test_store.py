@@ -1,4 +1,4 @@
-from mnemosyne.store import Store
+from atlas.store import Store
 
 def test_upsert_get_and_search(tmp_path):
     st = Store(str(tmp_path / "kg.db"))

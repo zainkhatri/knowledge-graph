@@ -1,4 +1,4 @@
-from mnemosyne import understanding as U
+from atlas import understanding as U
 
 NODE = {"kind": "project", "path": "/x/bdr", "name": "bdr",
         "meta": {"n_dirs": 3, "n_files": 12, "ext": {".js": 8, ".json": 4}}}

@@ -3,3 +3,19 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .superpowers/
+
+# Ruflo local secrets and runtime data
+.env
+.env.local
+.env.*.local
+.claude-flow/
+.claude/
+.agents/
+.codex/
+.swarm/
+ruvector.db
+~/
+
+# Ruflo scaffolding (installed tooling, not project source)
+AGENTS.md
+CLAUDE.md

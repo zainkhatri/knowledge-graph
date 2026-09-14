@@ -1,5 +1,5 @@
-from mnemosyne.store import Store
-from mnemosyne.link import link_boxes, ZEUS_ID
+from atlas.store import Store
+from atlas.link import link_boxes, ZEUS_ID
 
 def test_link_boxes_creates_hub_and_backup_edges(tmp_path):
     st = Store(str(tmp_path / "c.db"))

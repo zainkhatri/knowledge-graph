@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Minimal stdio JSON-RPC 2.0 MCP server for homelab-kg.
 Handles: initialize, tools/list, tools/call.
-No external deps beyond stdlib + mnemosyne.store.
+No external deps beyond stdlib + atlas.store.
 """
 import json, os, sys, traceback
 
@@ -9,7 +9,7 @@ ROOT = os.path.dirname(__file__)
 DB_PATH = os.environ.get("KG_DB", os.path.join(ROOT, "data", "homelab_kg.db"))
 
 sys.path.insert(0, ROOT)
-from mnemosyne.store import Store
+from atlas.store import Store
 
 _store = None
 

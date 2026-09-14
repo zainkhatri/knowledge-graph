@@ -1,5 +1,5 @@
 import os, time
-from mnemosyne.fingerprint import folder_fingerprint
+from atlas.fingerprint import folder_fingerprint
 
 def test_fingerprint_changes_on_child_add(tmp_path):
     d = tmp_path / "proj"; d.mkdir()
