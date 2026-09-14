@@ -1,5 +1,7 @@
 # ATLAS
 
+![ATLAS graph](docs/graph.png)
+
 A knowledge graph for my homelab. I got tired of agents re-reading the same folders every
 session and burning tokens on it, so ATLAS walks the filesystem once, has a local model
 (Ollama) write a one-line summary of each folder, and stores it all in SQLite. Any agent I
