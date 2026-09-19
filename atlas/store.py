@@ -1,4 +1,5 @@
 import sqlite3, json
+import numpy as np
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes(
@@ -17,6 +18,10 @@ class Store:
         self.db.execute("PRAGMA busy_timeout=60000")   # wait, don't fail, on concurrent writers
         self.db.execute("PRAGMA journal_mode=WAL")      # readers don't block the writer
         self.db.executescript(SCHEMA)
+        try:
+            self.db.execute("ALTER TABLE nodes ADD COLUMN embedding BLOB")
+        except sqlite3.OperationalError:
+            pass  # column already exists (every run after the first on a given db file)
 
     @staticmethod
     def _row(r):
@@ -25,18 +30,35 @@ class Store:
             d["meta"] = json.loads(d["meta"] or "{}")
         return d
 
+    @staticmethod
+    def vec_to_blob(vec):
+        """Serialize an embedding vector to the BLOB format stored in
+        nodes.embedding. None in, None out — 'no embedding' is NULL, never
+        a zero-vector (which would be a false similarity match)."""
+        if vec is None:
+            return None
+        return np.asarray(vec, dtype="float32").tobytes()
+
+    @staticmethod
+    def blob_to_vec(blob):
+        """Inverse of vec_to_blob. None in, None out."""
+        if blob is None:
+            return None
+        return np.frombuffer(blob, dtype="float32")
+
     def upsert_node(self, node):
         meta = json.dumps(node.get("meta") or {})
         with self.db:
             self.db.execute(
-                "INSERT INTO nodes(id,box,kind,path,name,understanding,fingerprint,size,mtime,status,meta)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+                "INSERT INTO nodes(id,box,kind,path,name,understanding,fingerprint,size,mtime,status,meta,embedding)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(id) DO UPDATE SET box=excluded.box,kind=excluded.kind,path=excluded.path,"
                 "name=excluded.name,understanding=excluded.understanding,fingerprint=excluded.fingerprint,"
-                "size=excluded.size,mtime=excluded.mtime,status=excluded.status,meta=excluded.meta",
+                "size=excluded.size,mtime=excluded.mtime,status=excluded.status,meta=excluded.meta,"
+                "embedding=excluded.embedding",
                 (node["id"], node["box"], node["kind"], node["path"], node["name"],
                  node.get("understanding"), node.get("fingerprint"), node.get("size"),
-                 node.get("mtime"), node.get("status", "live"), meta))
+                 node.get("mtime"), node.get("status", "live"), meta, node.get("embedding")))
             self.db.execute("DELETE FROM nodes_fts WHERE id=?", (node["id"],))
             self.db.execute("INSERT INTO nodes_fts(id,name,understanding) VALUES(?,?,?)",
                             (node["id"], node.get("name") or "", node.get("understanding") or ""))
@@ -67,6 +89,22 @@ class Store:
             "SELECT n.* FROM edges e JOIN nodes n ON n.id=e.dst"
             " WHERE e.src=? AND e.type='contains' ORDER BY n.name", (node_id,)).fetchall()
         return [self._row(r) for r in rows]
+
+    def all_embedded(self, box=None):
+        """Return (ids, matrix) for every node with a non-null embedding —
+        the corpus for semantic similarity search. matrix.shape is
+        (n_nodes, 768); ids[i] corresponds to matrix row i. Returns
+        ([], empty (0,0) array) if nothing is embedded yet."""
+        q = "SELECT id, embedding FROM nodes WHERE embedding IS NOT NULL"
+        args = []
+        if box:
+            q += " AND box=?"; args.append(box)
+        rows = self.db.execute(q, args).fetchall()
+        if not rows:
+            return [], np.zeros((0, 0), dtype="float32")
+        ids = [r["id"] for r in rows]
+        matrix = np.stack([self.blob_to_vec(r["embedding"]) for r in rows])
+        return ids, matrix
 
     @staticmethod
     def _fts_query(query, joiner=" "):
