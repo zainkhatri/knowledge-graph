@@ -1,16 +1,24 @@
 import os
 from .walker import walk, default_vault_pred
 from . import understanding as U
+from . import embeddings as E
 
-def collect(store, root, box="ARES", vault_pred=None, gen=None, retry_budget=500):
+def collect(store, root, box="ARES", vault_pred=None, gen=None, embed_fn=None, retry_budget=500):
     """retry_budget caps how many previously-failed (fingerprint-unchanged but
     understanding-empty) nodes get retried per run. Without this cap, fixing the
     empty-understanding bug below would regenerate the entire backlog in one
     pass — for a large existing backlog that's thousands of Ollama calls and
     blows the reindex timeout. Budgeted, it self-heals over many nightly runs
-    instead, the same pattern summarize-pending already uses for chat/gpt nodes."""
+    instead, the same pattern summarize-pending already uses for chat/gpt nodes.
+
+    embed_fn computes a semantic-search embedding for the same understanding
+    text, riding the same retry_budget (one extra Ollama call per already-
+    budgeted unit of work, not a new uncapped cost). Vault nodes and any node
+    that failed to generate understanding never get an embedding — nothing
+    meaningful to embed."""
     vault_pred = vault_pred if vault_pred is not None else default_vault_pred()
     gen = gen or U.generate
+    embed_fn = embed_fn or E.embed
     nodes = list(walk(root, box, vault_pred=vault_pred))
     by_id = {n["id"]: n for n in nodes}
     children = {}
@@ -32,15 +40,19 @@ def collect(store, root, box="ARES", vault_pred=None, gen=None, retry_budget=500
         # trust the cache only if it actually holds text, or the retry budget is spent.
         if fp_same and (prev.get("understanding") or retried >= retry_budget):
             u = prev.get("understanding")
+            emb = prev.get("embedding")   # reuse cached embedding alongside cached understanding
         elif "understanding" in n:            # e.g. vault node carries fixed text
             u = n["understanding"]; changed += 1
+            emb = None                        # fixed placeholder text, nothing to embed
         else:
             u = gen(n, kids); changed += 1
+            emb = store.vec_to_blob(embed_fn(u)) if u else None
             if fp_same:
                 retried += 1   # retry of a previously-failed node, not a genuine content change
         understandings[n["id"]] = u
         rec = {k: v for k, v in n.items() if k != "parent"}
         rec["understanding"] = u
+        rec["embedding"] = emb
         rec["status"] = "live"
         store.upsert_node(rec)
         if n["parent"]:

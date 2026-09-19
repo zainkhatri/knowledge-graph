@@ -73,3 +73,44 @@ def test_collect_vault_not_summarized(tmp_path):
     assert vnode["understanding"] == "Encrypted vault — contents not indexed."
     assert not any("My Eyes Only" in p for p in calls)   # gen never called for the vault
     st.close()
+
+def test_collect_stores_embedding_alongside_understanding(tmp_path):
+    root = str(tmp_path / "root")
+    os.makedirs(root)
+    build_tree(root)
+    st = Store(str(tmp_path / "kg.db"))
+    def gen(node, kids): return f"understood:{node['name']}"
+    def embed_fn(text, http=None): return [1.0, 2.0]
+    collect(st, root, "ARES", gen=gen, embed_fn=embed_fn)
+    proj = st.get_node("ARES:" + os.path.join(root, "projA"))
+    assert st.blob_to_vec(proj["embedding"]).tolist() == [1.0, 2.0]
+
+def test_collect_reuses_cached_embedding_when_unchanged(tmp_path):
+    root = str(tmp_path / "root")
+    os.makedirs(root)
+    build_tree(root)
+    st = Store(str(tmp_path / "kg.db"))
+    calls = {"n": 0}
+    def gen(node, kids): return "u"
+    def embed_fn(text, http=None):
+        calls["n"] += 1; return [float(calls["n"])]
+    collect(st, root, "ARES", gen=gen, embed_fn=embed_fn)
+    first_calls = calls["n"]
+    collect(st, root, "ARES", gen=gen, embed_fn=embed_fn)   # nothing changed
+    assert calls["n"] == first_calls   # embed_fn not called again, cache reused
+
+def test_collect_vault_nodes_never_embedded(tmp_path):
+    root = str(tmp_path / "root")
+    os.makedirs(root)
+    v = tmp_path / "root" / "My Eyes Only"
+    (v / "secret").mkdir(parents=True)
+    (v / "secret" / "d.txt").write_text("x")
+    (tmp_path / "root" / "readme.txt").write_text("hi")
+    st = Store(str(tmp_path / "kg.db"))
+    from atlas import walker
+    def gen(node, kids): return "u"
+    def embed_fn(text, http=None): return [1.0]
+    collect(st, root, "ARES", vault_pred=walker.default_vault_pred(), gen=gen, embed_fn=embed_fn)
+    vnode = st.get_node("ARES:" + str(v))
+    assert vnode["embedding"] is None
+    st.close()
