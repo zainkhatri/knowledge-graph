@@ -1,4 +1,3 @@
-import json
 from atlas.store import Store
 from atlas.chats import summarize_pending
 
