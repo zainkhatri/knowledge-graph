@@ -64,9 +64,11 @@ def index_gpt(store, gpt_dir=GPT_DIR, box="ARES", summarize=True, summary_budget
             und = (title + (" · " + " · ".join(asks) if asks else ""))[:700]   # fallback
             fpr = f"n{len(msgs)}"                                              # msg-count = change signal
             status = "raw"
+            emb = None
             prev = store.get_node(nid)
             if prev and prev.get("fingerprint") == fpr and prev.get("status") == "live":
                 und = prev["understanding"]; status = "live"
+                emb = prev.get("embedding")
             elif summarize and (summary_budget is None or summarized < summary_budget):
                 from .understanding import summarize_chat
                 s = summarize_chat([title] + asks)
@@ -78,6 +80,7 @@ def index_gpt(store, gpt_dir=GPT_DIR, box="ARES", summarize=True, summary_budget
                 "understanding": und, "mtime": int(ct) if ct else None,
                 "fingerprint": fpr, "status": status,
                 "meta": {"title": title, "turns": len(asks), "asks": ([title] + asks)[:6]},
+                "embedding": emb,
             })
             store.add_edge(hub_id, nid, "contains")
             gpt += 1

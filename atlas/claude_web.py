@@ -66,14 +66,18 @@ def index_claude_web(store, root, box="ARES", summarize=True, summary_budget=Non
             name = (f"{date} · " if date else "") + title[:70]
             fpr = f"n{len(msgs)}"
             status = "raw"
+            emb = None
             csum = (convo.get("summary") or "").strip()      # Claude's export ships its own summary
             und = (csum or title + (" · " + " · ".join(asks) if asks else ""))[:700]
+            prev = store.get_node(nid)
             if csum:
                 status = "live"                               # already summarized by Claude — no Ollama
+                if prev and prev.get("fingerprint") == fpr and prev.get("understanding") == und:
+                    emb = prev.get("embedding")                # same csum as last run — keep its embedding
             else:
-                prev = store.get_node(nid)
                 if prev and prev.get("fingerprint") == fpr and prev.get("status") == "live":
                     und = prev["understanding"]; status = "live"
+                    emb = prev.get("embedding")
                 elif summarize and (summary_budget is None or summarized < summary_budget):
                     from .understanding import summarize_chat
                     s = summarize_chat([title] + asks)
@@ -84,6 +88,7 @@ def index_claude_web(store, root, box="ARES", summarize=True, summary_budget=Non
                 "path": os.path.join(root, str(cid)), "name": name,
                 "understanding": und, "fingerprint": fpr, "status": status,
                 "meta": {"title": title, "turns": len(asks), "asks": ([title] + asks)[:6]},
+                "embedding": emb,
             })
             store.add_edge(hub_id, nid, "contains")
             n += 1

@@ -188,11 +188,12 @@ class Store:
         keep = set()
         try:
             for r in src.execute("SELECT id,box,kind,path,name,understanding,fingerprint,"
-                                  "size,mtime,status,meta FROM nodes").fetchall():
+                                  "size,mtime,status,meta,embedding FROM nodes").fetchall():
                 self.upsert_node({"id": r["id"], "box": r["box"], "kind": r["kind"], "path": r["path"],
                                   "name": r["name"], "understanding": r["understanding"],
                                   "fingerprint": r["fingerprint"], "size": r["size"], "mtime": r["mtime"],
-                                  "status": r["status"] or "live", "meta": json.loads(r["meta"] or "{}")})
+                                  "status": r["status"] or "live", "meta": json.loads(r["meta"] or "{}"),
+                                  "embedding": r["embedding"]})
                 keep.add(r["id"])
             for e in src.execute("SELECT src,dst,type,meta FROM edges").fetchall():
                 self.add_edge(e["src"], e["dst"], e["type"], json.loads(e["meta"] or "{}"))

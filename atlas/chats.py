@@ -121,9 +121,12 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
         cid = f"{box}:chat/{sid}"
         und = (summary or " · ".join(asks) or "")[:700]    # fallback: raw asks (searchable now)
         status = "raw"                                       # raw = not yet Ollama-summarized
+        emb = None
         prev = store.get_node(cid)
         if prev and fp and prev.get("fingerprint") == fp and prev.get("status") == "live":
             und = prev["understanding"]; status = "live"     # unchanged + already summarized → keep
+            emb = prev.get("embedding")                       # keep its embedding too — upsert_node
+                                                               # would otherwise null it (full-column replace)
         elif summarize and (summary_budget is None or summarized < summary_budget):
             from .understanding import summarize_chat
             s = summarize_chat(asks)
@@ -133,6 +136,7 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
             "id": cid, "box": box, "kind": "chat", "path": path, "name": name,
             "understanding": und, "mtime": mt, "fingerprint": fp, "status": status,
             "meta": {"session": sid, "cwd": cwd or "", "turns": len(asks), "asks": asks[:6]},
+            "embedding": emb,
         })
         store.add_edge(hub_id, cid, "contains")
         a = _anchor(store, box, cwd)

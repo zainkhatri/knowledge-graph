@@ -33,6 +33,21 @@ def test_merge_is_idempotent(tmp_path):
     assert res2 == {"merged": 1, "pruned": 0}
     central.close()
 
+def test_merge_from_preserves_embedding(tmp_path):
+    central = Store(str(tmp_path / "c.db"))
+    other = Store(str(tmp_path / "e.db"))
+    other.upsert_node({"id": "EROS:/x", "box": "EROS", "kind": "folder", "path": "/x",
+                       "name": "x", "understanding": "u /x", "fingerprint": "f", "size": 0,
+                       "mtime": 1, "status": "live", "meta": {},
+                       "embedding": other.vec_to_blob([1.0, 2.0, 3.0])})
+    other.close()
+
+    central.merge_from(str(tmp_path / "e.db"), "EROS")
+    merged = central.get_node("EROS:/x")
+    assert merged is not None
+    assert central.blob_to_vec(merged["embedding"]).tolist() == [1.0, 2.0, 3.0]
+    central.close()
+
 def test_cli_merge(tmp_path, monkeypatch, capsys):
     from atlas import cli
     other = Store(str(tmp_path / "e.db")); _seed(other, "EROS", ["/x"]); other.close()
