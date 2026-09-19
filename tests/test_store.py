@@ -76,3 +76,46 @@ def test_all_embedded_returns_ids_and_matrix(tmp_path):
     assert matrix.shape == (1, 2)
     assert matrix[0].tolist() == [1.0, 0.0]
     st.close()
+
+def test_semantic_fallback_finds_match_with_no_shared_words(tmp_path):
+    st = Store(str(tmp_path / "kg.db"))
+    # "photo library" and "image archive" share zero words but should be
+    # semantically close under a real embedding model — here we fake the
+    # embedder with hand-picked vectors so the test is deterministic.
+    st.upsert_node({"id": "ARES:/photos", "box": "ARES", "kind": "dataset",
+                    "path": "/photos", "name": "photos", "understanding": "photo library",
+                    "fingerprint": "f1", "size": 0, "mtime": 1, "status": "live", "meta": {},
+                    "embedding": st.vec_to_blob([1.0, 0.0, 0.0])})
+    st.upsert_node({"id": "ARES:/unrelated", "box": "ARES", "kind": "dataset",
+                    "path": "/unrelated", "name": "unrelated", "understanding": "totally unrelated",
+                    "fingerprint": "f2", "size": 0, "mtime": 1, "status": "live", "meta": {},
+                    "embedding": st.vec_to_blob([0.0, 1.0, 0.0])})
+    def fake_embed(text, http=None):
+        return [0.9, 0.1, 0.0]   # close to /photos, far from /unrelated
+    hits = st.search("image archive", embed_fn=fake_embed)
+    assert len(hits) == 1
+    assert hits[0]["id"] == "ARES:/photos"
+    st.close()
+
+def test_semantic_fallback_returns_empty_when_embed_fails(tmp_path):
+    st = Store(str(tmp_path / "kg.db"))
+    st.upsert_node({"id": "ARES:/x", "box": "ARES", "kind": "dataset", "path": "/x",
+                    "name": "x", "understanding": "something", "fingerprint": "f", "size": 0,
+                    "mtime": 1, "status": "live", "meta": {}, "embedding": st.vec_to_blob([1.0, 0.0])})
+    def failing_embed(text, http=None):
+        return None
+    assert st.search("nonsense query words", embed_fn=failing_embed) == []
+    st.close()
+
+def test_and_match_still_wins_without_calling_embed_fn(tmp_path):
+    st = Store(str(tmp_path / "kg.db"))
+    st.upsert_node({"id": "ARES:/x", "box": "ARES", "kind": "dataset", "path": "/x",
+                    "name": "x", "understanding": "zeus backup vault", "fingerprint": "f",
+                    "size": 0, "mtime": 1, "status": "live", "meta": {}})
+    called = {"n": 0}
+    def fake_embed(text, http=None):
+        called["n"] += 1; return [1.0]
+    hits = st.search("zeus backup", embed_fn=fake_embed)
+    assert len(hits) == 1
+    assert called["n"] == 0   # AND already matched — semantic tier never invoked
+    st.close()

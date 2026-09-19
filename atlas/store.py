@@ -127,17 +127,11 @@ class Store:
         "were","what","when","where","which","who","why","will","with","you","your",
     }
 
-    def search(self, query, limit=20):
-        """AND-first for precision, then a quorum-filtered OR fallback for recall.
-        A caller (an LLM) phrasing a natural-language query rarely has every word
-        land in the same node's short understanding text — an audit of 186 real
-        kg_search calls found the strict-AND-only version came back empty 67% of
-        the time even when relevant nodes existed. But plain OR overcorrects: with
-        CLAUDE.md now calling kg_search on every message (not just homelab
-        questions), a loose single-word OR match would surface noise on unrelated
-        turns. Fallback keeps only rows matching at least half the query's
-        CONTENT tokens (stopwords excluded — otherwise a stopword-heavy off-topic
-        sentence hits quorum on coincidence alone), ranked by overlap count."""
+    def search(self, query, limit=20, embed_fn=None):
+        """Three tiers, stopping at the first with results: AND (exact) ->
+        quorum-OR (at least half the content tokens) -> semantic (cosine
+        similarity over embeddings, via Ollama). Tier 3 only runs when 1 and
+        2 both come back empty, so it adds zero latency to the common case."""
         and_match = self._fts_query(query)
         if not and_match:
             return []
@@ -147,23 +141,46 @@ class Store:
         if rows:
             return [self._row(r) for r in rows]
         content_tokens = [t for t in (query or "").split() if t and t.lower() not in self._STOPWORDS]
-        if len(content_tokens) < 2:   # nothing meaningful (or too little) left to fall back on
+        if len(content_tokens) >= 2:
+            or_match = self._fts_query(" ".join(content_tokens), joiner=" OR ")
+            pool_size = max(limit * 4, 60)
+            candidates = self.db.execute(
+                "SELECT n.* FROM nodes_fts f JOIN nodes n ON n.id=f.id"
+                " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?", (or_match, pool_size)).fetchall()
+            needed = max(1, -(-len(content_tokens) // 2))   # ceil(n/2)
+            lowered = [t.lower() for t in content_tokens]
+            scored = []
+            for i, r in enumerate(candidates):
+                text = f"{r['name'] or ''} {r['understanding'] or ''}".lower()
+                overlap = sum(1 for t in lowered if t in text)
+                if overlap >= needed:
+                    scored.append((-overlap, i, r))
+            scored.sort()
+            if scored:
+                return [self._row(r) for _, _, r in scored[:limit]]
+        # tier 3: semantic
+        from . import embeddings as E
+        embed_fn = embed_fn or E.embed
+        qvec = embed_fn(query)
+        if qvec is None:
             return []
-        or_match = self._fts_query(" ".join(content_tokens), joiner=" OR ")
-        pool_size = max(limit * 4, 60)
-        candidates = self.db.execute(
-            "SELECT n.* FROM nodes_fts f JOIN nodes n ON n.id=f.id"
-            " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?", (or_match, pool_size)).fetchall()
-        needed = max(1, -(-len(content_tokens) // 2))   # ceil(n/2)
-        lowered = [t.lower() for t in content_tokens]
-        scored = []
-        for i, r in enumerate(candidates):
-            text = f"{r['name'] or ''} {r['understanding'] or ''}".lower()
-            overlap = sum(1 for t in lowered if t in text)
-            if overlap >= needed:
-                scored.append((-overlap, i, r))   # i preserves original rank order as tiebreak
-        scored.sort()
-        return [self._row(r) for _, _, r in scored[:limit]]
+        ids, matrix = self.all_embedded()
+        if not ids:
+            return []
+        qv = np.asarray(qvec, dtype="float32")
+        qn = qv / (np.linalg.norm(qv) or 1.0)
+        mn = matrix / (np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-9)
+        sims = mn @ qn
+        order = np.argsort(-sims)
+        SIM_FLOOR = 0.5   # starting point — tune against the historical-query
+                          # replay harness (see docs/plans/2026-09-19-atlas-semantic-search.md Task 6)
+        top_ids = [ids[i] for i in order[:limit] if sims[i] >= SIM_FLOOR]
+        if not top_ids:
+            return []
+        ph = ",".join("?" * len(top_ids))
+        rows = self.db.execute(f"SELECT * FROM nodes WHERE id IN ({ph})", top_ids).fetchall()
+        by_id = {r["id"]: self._row(r) for r in rows}
+        return [by_id[i] for i in top_ids if i in by_id]
 
     def merge_from(self, other_path, box):
         src = sqlite3.connect(f"file:{other_path}?mode=ro", uri=True)
