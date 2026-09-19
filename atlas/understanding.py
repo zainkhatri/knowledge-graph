@@ -14,8 +14,10 @@ def build_prompt(node, children_understandings):
                     sorted((meta.get("ext") or {}).items(), key=lambda x: -x[1])[:6])
     kids = "; ".join((children_understandings or [])[:12])
     return (
-        "You are cataloguing a homelab NAS. In ONE or TWO sentences, state what this folder is "
-        "and what it holds. Be concrete and factual. No preamble, no bullet points.\n"
+        "You are cataloguing a homelab NAS for future search. In THREE to FIVE sentences, state "
+        "what this folder is, what it holds, and anything notable (scale, purpose, how it's used). "
+        "Mention specific subfolder or file-type names where relevant instead of staying generic. "
+        "Be concrete and factual. No preamble, no bullet points.\n"
         f"Folder path: {node['path']}\n"
         f"Name: {node['name']}\n"
         f"Contains: {meta.get('n_dirs', 0)} subfolders, {meta.get('n_files', 0)} files. "
@@ -49,6 +51,10 @@ def summarize_chat(asks, http=None):
     except Exception:
         return None
 
+# 800 (was 400): the folder prompt now asks for 3-5 sentences instead of 1-2, so the
+# old cap was truncating the richer output mid-sentence.
+UNDERSTANDING_MAX_CHARS = 800
+
 def generate(node, children_understandings=None, http=None):
     if node.get("kind") == "vault":
         return "Encrypted vault — contents not indexed."
@@ -60,6 +66,6 @@ def generate(node, children_understandings=None, http=None):
     caller = http or _http_post
     try:
         resp = caller(f"{OLLAMA_HOST}/api/generate", payload)
-        return ((resp.get("response") or "").strip()[:400]) or None
+        return ((resp.get("response") or "").strip()[:UNDERSTANDING_MAX_CHARS]) or None
     except Exception:
         return None

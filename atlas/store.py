@@ -68,11 +68,64 @@ class Store:
             " WHERE e.src=? AND e.type='contains' ORDER BY n.name", (node_id,)).fetchall()
         return [self._row(r) for r in rows]
 
+    @staticmethod
+    def _fts_query(query, joiner=" "):
+        """Quote each whitespace token as an FTS5 phrase so punctuation like
+        '-' is treated as literal text, not a MATCH operator (which raises
+        OperationalError on queries such as 'kg-nightly'). Internal double
+        quotes are doubled per FTS5 escaping. joiner=" " gives implicit AND
+        (precise); joiner=" OR " gives OR (broader recall). Returns '' for an
+        empty query."""
+        tokens = [t for t in (query or "").split() if t]
+        return joiner.join('"' + t.replace('"', '""') + '"' for t in tokens)
+
+    # Excluded from the fallback's quorum count (and from the OR candidate fetch)
+    # so a stopword-heavy off-topic sentence can't rack up a fake quorum just by
+    # coincidence — with CLAUDE.md now calling kg_search on every message, this
+    # is the difference between "silent on unrelated turns" and "surfaces junk".
+    _STOPWORDS = {
+        "a","an","and","are","as","at","be","by","for","from","how","i","in","into",
+        "is","it","its","many","of","on","or","that","the","there","this","to","was",
+        "were","what","when","where","which","who","why","will","with","you","your",
+    }
+
     def search(self, query, limit=20):
+        """AND-first for precision, then a quorum-filtered OR fallback for recall.
+        A caller (an LLM) phrasing a natural-language query rarely has every word
+        land in the same node's short understanding text — an audit of 186 real
+        kg_search calls found the strict-AND-only version came back empty 67% of
+        the time even when relevant nodes existed. But plain OR overcorrects: with
+        CLAUDE.md now calling kg_search on every message (not just homelab
+        questions), a loose single-word OR match would surface noise on unrelated
+        turns. Fallback keeps only rows matching at least half the query's
+        CONTENT tokens (stopwords excluded — otherwise a stopword-heavy off-topic
+        sentence hits quorum on coincidence alone), ranked by overlap count."""
+        and_match = self._fts_query(query)
+        if not and_match:
+            return []
         rows = self.db.execute(
             "SELECT n.* FROM nodes_fts f JOIN nodes n ON n.id=f.id"
-            " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?", (query, limit)).fetchall()
-        return [self._row(r) for r in rows]
+            " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?", (and_match, limit)).fetchall()
+        if rows:
+            return [self._row(r) for r in rows]
+        content_tokens = [t for t in (query or "").split() if t and t.lower() not in self._STOPWORDS]
+        if len(content_tokens) < 2:   # nothing meaningful (or too little) left to fall back on
+            return []
+        or_match = self._fts_query(" ".join(content_tokens), joiner=" OR ")
+        pool_size = max(limit * 4, 60)
+        candidates = self.db.execute(
+            "SELECT n.* FROM nodes_fts f JOIN nodes n ON n.id=f.id"
+            " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?", (or_match, pool_size)).fetchall()
+        needed = max(1, -(-len(content_tokens) // 2))   # ceil(n/2)
+        lowered = [t.lower() for t in content_tokens]
+        scored = []
+        for i, r in enumerate(candidates):
+            text = f"{r['name'] or ''} {r['understanding'] or ''}".lower()
+            overlap = sum(1 for t in lowered if t in text)
+            if overlap >= needed:
+                scored.append((-overlap, i, r))   # i preserves original rank order as tiebreak
+        scored.sort()
+        return [self._row(r) for _, _, r in scored[:limit]]
 
     def merge_from(self, other_path, box):
         src = sqlite3.connect(f"file:{other_path}?mode=ro", uri=True)

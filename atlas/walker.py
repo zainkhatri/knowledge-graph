@@ -12,7 +12,16 @@ IGNORE_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__",
                ".pytest_cache", ".mypy_cache", ".tox", "dist", "build", ".next",
                ".nuxt", ".output", ".turbo", ".cache", ".parcel-cache", "coverage",
                ".idea", ".vscode", "target", "vendor", "bower_components", ".svn",
-               ".terraform", ".gradle", "__snapshots__", ".ipynb_checkpoints"}
+               ".terraform", ".gradle", "__snapshots__", ".ipynb_checkpoints",
+               # Postgres data directories — engine internals, not content. Named
+               # PGDATA dirs on the boxes we index, plus their pg_* subfolders in
+               # case a data dir is ever reached via a different parent path.
+               "ibt-db-data", "pg_serial", "pg_notify", "pg_twophase", "pg_multixact",
+               "pg_xact", "pg_logical", "pg_replslot", "pg_snapshots", "pg_stat",
+               "pg_stat_tmp", "pg_tblspc", "pg_dynshmem", "pg_commit_ts",
+               "pg_subtrans", "pg_wal", "pg_xlog",
+               # Filesystem/OS reserved dirs — never real content
+               "lost+found", ".lost+found"}
 
 def node_id(box, path):
     return f"{box}:{path}"

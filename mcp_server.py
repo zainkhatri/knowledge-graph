@@ -70,7 +70,16 @@ def kg_stat() -> dict:
 TOOLS = [
     {
         "name": "kg_search",
-        "description": "Full-text search the homelab knowledge graph. Returns matching nodes (id, kind, name, understanding, path).",
+        "description": (
+            "Search the ARES/EROS/ZEUS homelab knowledge graph: indexed summaries of every "
+            "folder in the storage pool, past Claude Code + ChatGPT + claude.ai conversation "
+            "history, and installed skills/MCPs/agents. Use this BEFORE grepping the "
+            "filesystem, reading memory files one by one, or asking the user for homelab "
+            "context (what's on a box, where a service lives, past decisions/incidents) — it "
+            "often already has the answer. Tries an exact match first, falls back to a "
+            "broader match automatically. Returns matching nodes (id, kind, name, "
+            "understanding, path)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -82,7 +91,7 @@ TOOLS = [
     },
     {
         "name": "kg_get",
-        "description": "Get a single node by id from the homelab knowledge graph.",
+        "description": "Get full details of one homelab-kg node by id (from a kg_search result's 'id' field) — its full understanding text, path, and metadata.",
         "inputSchema": {
             "type": "object",
             "properties": {"id": {"type": "string"}},
@@ -91,7 +100,7 @@ TOOLS = [
     },
     {
         "name": "kg_neighbors",
-        "description": "Get edges adjacent to a node. Optionally filter by edge type.",
+        "description": "What's connected to a homelab-kg node — parent/child folders, related chats, backup links. Use after kg_search to explore context around a hit.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -103,7 +112,7 @@ TOOLS = [
     },
     {
         "name": "kg_tree",
-        "description": "Return a node's hierarchical children tree up to a given depth.",
+        "description": "Browse a homelab-kg node's subfolder tree with summaries, like a smart 'ls -R' that already knows what's in each folder. Good for 'what's in PROJECTS/X' type questions.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -115,7 +124,7 @@ TOOLS = [
     },
     {
         "name": "kg_stat",
-        "description": "Return node/edge counts and breakdown by kind for the homelab knowledge graph.",
+        "description": "Quick health check of the homelab-kg graph itself (total nodes/edges, breakdown by kind) — use to sanity-check the graph is populated, not for answering homelab questions.",
         "inputSchema": {"type": "object", "properties": {}},
     },
 ]

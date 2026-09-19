@@ -21,14 +21,14 @@ stdio JSON-RPC 2.0 over SQLite.
 
 ## Layout
 
-- `atlas/walker.py` — filesystem walker, adaptive depth, skips node_modules/.git/etc
-- `atlas/fingerprint.py` — change detection
-- `atlas/understanding.py` — Ollama summarization
-- `atlas/store.py` — SQLite + FTS5 storage, WAL mode
-- `atlas/link.py` — merging graphs across boxes
-- `atlas/chats.py`, `atlas/claude_web.py`, `atlas/gpt.py` — indexing chat history
-- `atlas/env.py` — indexing installed skills/MCP servers/agents
-- `mcp_server.py` — the MCP server itself
+- `atlas/walker.py`: filesystem walker, adaptive depth, skips node_modules/.git/etc
+- `atlas/fingerprint.py`: change detection
+- `atlas/understanding.py`: Ollama summarization
+- `atlas/store.py`: SQLite + FTS5 storage, WAL mode
+- `atlas/link.py`: merging graphs across boxes
+- `atlas/chats.py`, `atlas/claude_web.py`, `atlas/gpt.py`: indexing chat history
+- `atlas/env.py`: indexing installed skills/MCP servers/agents
+- `mcp_server.py`: the MCP server itself
 
 ## CLI
 
