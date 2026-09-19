@@ -144,12 +144,15 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
     return {"chats": chats, "project_linked": linked, "summarized": summarized, "hub": hub_id}
 
 
-def summarize_pending(store, budget=500, kinds=("chat", "gpt-chat", "claude-chat")):
+def summarize_pending(store, budget=500, kinds=("chat", "gpt-chat", "claude-chat"), embed_fn=None):
     """Generate Ollama summaries for chat/gpt nodes still marked status='raw', from the
     asks stored in meta — so it works for ANY box (ZEUS chats included) without the source
-    file. Bounded by budget; run nightly to spread a big backfill across days."""
+    file. Bounded by budget; run nightly to spread a big backfill across days. Also computes
+    a semantic-search embedding for each freshly-generated summary, riding the same budget."""
     import json as _json
     from .understanding import summarize_chat, gpu_on_loan
+    from . import embeddings as E
+    embed_fn = embed_fn or E.embed
     if gpu_on_loan():
         return {"summarized": 0, "note": "gpu-on-loan"}
     ph = ",".join("?" * len(kinds))
@@ -164,8 +167,10 @@ def summarize_pending(store, budget=500, kinds=("chat", "gpt-chat", "claude-chat
         s = summarize_chat(asks)
         if not s:
             continue
+        emb = store.vec_to_blob(embed_fn(s))
         with store.db:
-            store.db.execute("UPDATE nodes SET understanding=?, status='live' WHERE id=?", (s, r["id"]))
+            store.db.execute("UPDATE nodes SET understanding=?, status='live', embedding=? WHERE id=?",
+                             (s, emb, r["id"]))
             store.db.execute("DELETE FROM nodes_fts WHERE id=?", (r["id"],))
             store.db.execute("INSERT INTO nodes_fts(id,name,understanding) VALUES(?,?,?)",
                              (r["id"], r["name"], s))
