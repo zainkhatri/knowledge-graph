@@ -1,5 +1,40 @@
+import os, subprocess, sys
 import numpy as np
 from atlas.store import Store
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def test_store_works_without_numpy_installed(tmp_path):
+    """EROS (and any other box atlas gets shipped to for a plain filesystem
+    reindex — see kg-sync-eros.sh's 'stdlib only' design) doesn't have numpy.
+    Store/upsert_node/basic search must keep working there; only the
+    embedding-specific calls should need numpy, and only when actually used.
+    Runs in a subprocess since sys.modules poisoning must happen before
+    atlas.store is first imported anywhere in the process."""
+    db_path = str(tmp_path / "kg.db")
+    code = f'''
+import sys
+sys.modules["numpy"] = None   # simulates a box with no numpy installed
+sys.path.insert(0, {_REPO_ROOT!r})
+from atlas.store import Store
+st = Store({db_path!r})
+st.upsert_node({{"id": "ARES:/x", "box": "ARES", "kind": "folder", "path": "/x",
+                "name": "x", "understanding": "hello", "fingerprint": "f",
+                "size": 0, "mtime": 1, "status": "live", "meta": {{}}}})
+n = st.get_node("ARES:/x")
+assert n["name"] == "x"
+hits = st.search("hello")
+assert any(h["id"] == "ARES:/x" for h in hits)
+# embedding calls degrade gracefully instead of crashing the whole module
+assert st.vec_to_blob([1.0, 2.0]) is None
+assert st.blob_to_vec(b"whatever") is None
+ids, matrix = st.all_embedded()
+assert ids == []
+print("OK")
+'''
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
+    assert "OK" in r.stdout
 
 def test_upsert_get_and_search(tmp_path):
     st = Store(str(tmp_path / "kg.db"))

@@ -1,5 +1,4 @@
 import sqlite3, json
-import numpy as np
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes(
@@ -34,8 +33,17 @@ class Store:
     def vec_to_blob(vec):
         """Serialize an embedding vector to the BLOB format stored in
         nodes.embedding. None in, None out — 'no embedding' is NULL, never
-        a zero-vector (which would be a false similarity match)."""
+        a zero-vector (which would be a false similarity match). numpy is
+        imported lazily, after the None-check, so a box with no embedding
+        to store (the common case on EROS — see kg-sync-eros.sh's 'stdlib
+        only' design, and no numpy there) never needs numpy at all; a box
+        that also lacks numpy but somehow gets a real vector degrades to
+        None (embedding silently skipped) instead of crashing the caller."""
         if vec is None:
+            return None
+        try:
+            import numpy as np
+        except ImportError:
             return None
         return np.asarray(vec, dtype="float32").tobytes()
 
@@ -43,6 +51,10 @@ class Store:
     def blob_to_vec(blob):
         """Inverse of vec_to_blob. None in, None out."""
         if blob is None:
+            return None
+        try:
+            import numpy as np
+        except ImportError:
             return None
         return np.frombuffer(blob, dtype="float32")
 
@@ -94,7 +106,14 @@ class Store:
         """Return (ids, matrix) for every node with a non-null embedding —
         the corpus for semantic similarity search. matrix.shape is
         (n_nodes, 768); ids[i] corresponds to matrix row i. Returns
-        ([], empty (0,0) array) if nothing is embedded yet."""
+        ([], empty (0,0) array) if nothing is embedded yet, or if numpy
+        isn't installed on this box (see vec_to_blob's docstring — a box
+        with no numpy also never has real embeddings to serve, so this is
+        just the same empty-corpus case)."""
+        try:
+            import numpy as np
+        except ImportError:
+            return [], None
         q = "SELECT id, embedding FROM nodes WHERE embedding IS NOT NULL"
         args = []
         if box:
@@ -166,7 +185,8 @@ class Store:
             return []
         ids, matrix = self.all_embedded()
         if not ids:
-            return []
+            return []   # also covers "numpy not installed" — all_embedded() returns [] for that too
+        import numpy as np
         qv = np.asarray(qvec, dtype="float32")
         qn = qv / (np.linalg.norm(qv) or 1.0)
         mn = matrix / (np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-9)
