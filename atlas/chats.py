@@ -1,69 +1,21 @@
 """Index Claude Code conversation transcripts into the knowledge graph.
 
-Each session (`~/.claude/projects/<dir>/<uuid>.jsonl`) becomes a `chat` node:
-its name/understanding are the user's asks (FTS-searchable), its path is the
-transcript file, and it's linked (a) under a "Claude Code Chats" hub and
-(b) under the nearest existing folder node for the session's cwd — so past
-context shows up when you traverse the project it happened in.
-
-Bounded + stdlib-only. Reads only the head of each transcript (even 70MB ones).
+Each session (`<projects_root>/<dir>/<uuid>.jsonl`) becomes a `chat` node. The
+source is normally the permanent archive (PERSONAL/CLAUDE-CODE-SESSIONS/<SRC>),
+filled by kg-sync-sessions.sh, so a session keeps its node even after Claude Code
+or a box deletes the original. The WHOLE transcript is read (atlas.transcript);
+its understanding is an OpenRouter summary of a redacted digest (raw title+asks
+until then). Linked under a per-box "Claude Code Chats" hub and under the
+nearest folder node for the session's cwd.
 """
-import os, glob, json, time
+import os, glob, time
+from concurrent.futures import ThreadPoolExecutor
 
 HUB_PATH = "/mnt/nvme/PROMETHEUS/CLAUDE-CHATS"
 # candidate box-root node paths to hang the chats hub under (best-effort)
 ROOT_CANDS = ["/mnt/nvme/PROMETHEUS", "/srv/mergerfs/PROMETHEUS", "/srv", "/root"]
-
-
-def _iter_head(path, max_lines=400):
-    n = 0
-    try:
-        with open(path, "r", errors="ignore") as f:
-            for line in f:
-                n += 1
-                if n > max_lines:
-                    return
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    yield json.loads(line)
-                except Exception:
-                    continue
-    except Exception:
-        return
-
-
-def _text(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return " ".join(c.get("text", "") for c in content
-                         if isinstance(c, dict) and c.get("type") == "text")
-    return ""
-
-
-def _summarize(path):
-    """Return (cwd, timestamp, [user asks], summary)."""
-    cwd = ts = summary = None
-    asks = []
-    for d in _iter_head(path):
-        t = d.get("type")
-        if t == "summary" and d.get("summary"):
-            summary = summary or d["summary"]
-        if cwd is None and d.get("cwd"):
-            cwd = d["cwd"]
-        if ts is None and d.get("timestamp"):
-            ts = d["timestamp"]
-        if t == "user" and len(asks) < 6:
-            txt = _text(d.get("message", {}).get("content")).strip().replace("\n", " ")
-            # skip tool-results / injected command noise
-            if txt and not txt.startswith("<") and "tool_result" not in txt[:40] \
-               and "[Request interrupted" not in txt:
-                asks.append(txt)
-        if cwd and ts and len(asks) >= 6:
-            break
-    return cwd, ts, asks, summary
+MAX_FILES = 200_000
+SUMMARY_VERSION = 2          # bump to force every session to be re-summarized once
 
 
 def _date(path, ts):
@@ -80,7 +32,9 @@ def _anchor(store, box, cwd):
     if not cwd:
         return None
     p = cwd.rstrip("/")
-    while p and p != "/":
+    for _ in range(64):
+        if not p or p == "/":
+            return None
         nid = f"{box}:{p}"
         if store.get_node(nid):
             return nid
@@ -88,11 +42,7 @@ def _anchor(store, box, cwd):
     return None
 
 
-def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
-                summarize=True, summary_budget=None):
-    """summary_budget: max NEW Ollama summaries to generate this run (None = unlimited).
-    Chats over budget are still indexed with the raw-asks fallback and get summarized on a
-    later run (fingerprint change-detection). Lets a big backfill spread across nights."""
+def _ensure_hub(store, box):
     hub_id = f"{box}:chats"
     store.upsert_node({
         "id": hub_id, "box": box, "kind": "folder", "path": f"/{box}/CLAUDE-CHATS",
@@ -103,72 +53,151 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
     for cand in ROOT_CANDS:
         if store.get_node(f"{box}:{cand}"):
             store.add_edge(f"{box}:{cand}", hub_id, "contains"); break
+    return hub_id
 
-    files = glob.glob(os.path.join(projects_root, "*", "*.jsonl"))
-    chats = linked = summarized = 0
+
+def _sample(asks, k=12):
+    if len(asks) <= k:
+        return list(asks)
+    step = max(1, len(asks) // (k - 1))
+    return asks[::step][:k - 1] + asks[-1:]
+
+
+def _node_for(path, box, sid, tr, fp, mt, prev):
+    """Build the node dict from a parsed transcript. Keeps a previous summary as the
+    understanding (status raw → re-summarized when idle) rather than regressing to asks."""
+    asks = tr["asks"]
+    sampled = _sample(asks)
+    date = _date(path, tr["first_ts"])
+    first = tr["title"] or (asks[0] if asks else tr["summary"]) or f"session {sid[:8]}"
+    name = (f"{date} · " if date else "") + first[:90]
+    raw = " · ".join(x for x in [tr["title"], tr["summary"]] if x)
+    raw = ((raw + " · ") if raw else "") + " · ".join(a[:200] for a in sampled)
+    und = prev["understanding"] if prev and prev.get("status") == "live" else raw[:1500]
+    sv = (prev.get("meta") or {}).get("sv") if prev else None
+    return {
+        "id": f"{box}:chat/{sid}", "box": box, "kind": "chat", "path": path, "name": name,
+        "understanding": und, "mtime": mt, "fingerprint": fp, "status": "raw",
+        "meta": {"session": sid, "cwd": tr["cwd"] or "", "turns": len(asks), "asks": sampled,
+                 "title": tr["title"] or "", "last_ts": tr["last_ts"] or "", "sv": sv},
+        "embedding": prev.get("embedding") if prev else None,
+    }
+
+
+def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
+                summarize=True, summary_budget=None, min_idle=900, workers=8,
+                now=None, embed_fn=None):
+    """Index every session under projects_root as box. Unchanged files are skipped
+    without a re-read. Sessions idle >= min_idle seconds and not yet summarized get an
+    OpenRouter summary (max summary_budget this run, `workers` in parallel).
+    HTTP 402 stops summarizing; indexing still completes."""
+    from .transcript import read as read_transcript, digest as make_digest
+    from . import understanding as U
+    from . import embeddings as E
+    embed_fn = embed_fn or E.embed
+    now = now if now is not None else time.time()
+    hub_id = _ensure_hub(store, box)
+
+    files = sorted(glob.glob(os.path.join(projects_root, "*", "*.jsonl")))[:MAX_FILES]
+    chats = linked = unchanged = 0
+    todo = []                                    # (node, digest) awaiting a summary
     for path in files:
         sid = os.path.splitext(os.path.basename(path))[0]
-        cwd, ts, asks, summary = _summarize(path)
-        if not asks and not summary:
-            continue
-        date = _date(path, ts)
-        first = (asks[0] if asks else summary) or "chat"
-        name = (f"{date} · " if date else "") + first[:70]
+        cid = f"{box}:chat/{sid}"
         try:
             st = os.stat(path); mt = int(st.st_mtime); fp = f"{mt}:{st.st_size}"
-        except Exception:
-            mt = None; fp = None
-        cid = f"{box}:chat/{sid}"
-        und = (summary or " · ".join(asks) or "")[:700]    # fallback: raw asks (searchable now)
-        status = "raw"                                       # raw = not yet Ollama-summarized
-        emb = None
-        prev = store.get_node(cid)
-        if prev and fp and prev.get("fingerprint") == fp and prev.get("status") == "live":
-            und = prev["understanding"]; status = "live"     # unchanged + already summarized → keep
-            emb = prev.get("embedding")                       # keep its embedding too — upsert_node
-                                                               # would otherwise null it (full-column replace)
-        elif summarize and (summary_budget is None or summarized < summary_budget):
-            from .understanding import summarize_chat
-            s = summarize_chat(asks)
-            if s:
-                und = s; status = "live"; summarized += 1
-        store.upsert_node({
-            "id": cid, "box": box, "kind": "chat", "path": path, "name": name,
-            "understanding": und, "mtime": mt, "fingerprint": fp, "status": status,
-            "meta": {"session": sid, "cwd": cwd or "", "turns": len(asks), "asks": asks[:6]},
-            "embedding": emb,
-        })
-        store.add_edge(hub_id, cid, "contains")
-        a = _anchor(store, box, cwd)
-        if a and a != hub_id:
-            store.add_edge(a, cid, "contains")
-            linked += 1
+        except OSError:
+            continue
         chats += 1
+        prev = store.get_node(cid)
+        same = bool(prev) and prev.get("fingerprint") == fp and prev.get("path") == path
+        fresh = bool(prev) and prev.get("status") == "live" and \
+            (prev.get("meta") or {}).get("sv") == SUMMARY_VERSION
+        idle = (now - mt) >= min_idle
+        wants_summary = summarize and idle
+        if same and (fresh or not wants_summary):
+            unchanged += 1
+            continue
+        tr = read_transcript(path)
+        node = _node_for(path, box, sid, tr, fp, mt, prev)
+        if not same:
+            store.upsert_node(node)
+            store.add_edge(hub_id, cid, "contains")
+            a = _anchor(store, box, tr["cwd"])
+            if a and a != hub_id:
+                store.add_edge(a, cid, "contains"); linked += 1
+        if wants_summary and tr["turns"] and \
+                (summary_budget is None or len(todo) < summary_budget):
+            todo.append((node, make_digest(tr["turns"]), tr))
     store.db.commit()
-    return {"chats": chats, "project_linked": linked, "summarized": summarized, "hub": hub_id}
+
+    summarized, out_of_credit = _summarize_batch(store, todo, box, U, embed_fn, workers)
+    return {"chats": chats, "unchanged": unchanged, "project_linked": linked,
+            "summarized": summarized, "queued": len(todo), "out_of_credit": out_of_credit,
+            "hub": hub_id}
+
+
+def _summarize_batch(store, todo, box, U, embed_fn, workers):
+    """Run summaries in threads (HTTP only); write results on this thread."""
+    if not todo:
+        return 0, False
+    state = {"broke": False}
+
+    def work(item):
+        node, dig, tr = item
+        if state["broke"]:
+            return node, None, None
+        try:
+            s = U.summarize_session(dig, title=tr["title"], cwd=tr["cwd"], box=box)
+        except U.OutOfCredit:
+            state["broke"] = True
+            return node, None, None
+        emb = embed_fn(s) if s else None
+        return node, s, emb
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        for node, s, emb in ex.map(work, todo):
+            if not s:
+                continue
+            node = dict(node, understanding=s, status="live",
+                        meta=dict(node["meta"], sv=SUMMARY_VERSION),
+                        embedding=store.vec_to_blob(emb) if emb else node.get("embedding"))
+            store.upsert_node(node)
+            done += 1
+    return done, state["broke"]
 
 
 def summarize_pending(store, budget=500, kinds=("chat", "gpt-chat", "claude-chat"), embed_fn=None):
-    """Generate Ollama summaries for chat/gpt nodes still marked status='raw', from the
-    asks stored in meta — so it works for ANY box (ZEUS chats included) without the source
-    file. Bounded by budget; run nightly to spread a big backfill across days. Also computes
-    a semantic-search embedding for each freshly-generated summary, riding the same budget."""
+    """Summarize chat/gpt nodes still marked status='raw' from the asks in meta, so it
+    works for ANY box without the source file. Uses OpenRouter when a key exists (the GPU
+    loan does not apply), else local Ollama (skipped under .gpu-on-loan). Bounded by
+    budget. Also stores a semantic-search embedding for each new summary."""
     import json as _json
-    from .understanding import summarize_chat, gpu_on_loan
+    from . import understanding as U
     from . import embeddings as E
     embed_fn = embed_fn or E.embed
-    if gpu_on_loan():
+    if not U.openrouter_key() and U.gpu_on_loan():
         return {"summarized": 0, "note": "gpu-on-loan"}
     ph = ",".join("?" * len(kinds))
     rows = store.db.execute(
-        f"SELECT id, name, meta FROM nodes WHERE status='raw' AND kind IN ({ph}) LIMIT ?",
-        (*kinds, int(budget))).fetchall()
+        f"SELECT id, name, path, meta, kind FROM nodes WHERE status='raw' AND kind IN ({ph})"
+        " ORDER BY kind='chat' LIMIT ?", (*kinds, int(budget) * 4)).fetchall()
     done = 0
     for r in rows:
+        if done >= budget:
+            break
+        # a Claude Code chat whose transcript still exists is index_chats' job (whole-file
+        # summary once idle); only orphaned ones (source deleted) fall back to their asks
+        if r["kind"] == "chat" and r["path"] and os.path.exists(r["path"]):
+            continue
         asks = (_json.loads(r["meta"] or "{}")).get("asks") or []
         if not asks:
             continue
-        s = summarize_chat(asks)
+        try:
+            s = U.summarize_chat(asks)
+        except U.OutOfCredit:
+            break
         if not s:
             continue
         emb = store.vec_to_blob(embed_fn(s))

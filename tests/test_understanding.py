@@ -33,3 +33,48 @@ def test_gpu_loan_skips(monkeypatch):
         called["n"] += 1; return {"response": "x"}
     assert U.generate(NODE, [], http=fake_http) is None
     assert called["n"] == 0
+
+
+def _or_http(seen, reply="Fixed the Caddy config on ARES."):
+    def fake(key, body):
+        seen["key"] = key; seen["body"] = body
+        return {"choices": [{"message": {"content": "  " + reply + "  "}}]}
+    return fake
+
+
+def test_summarize_session_uses_openrouter_and_redacts(monkeypatch):
+    monkeypatch.setattr(U, "openrouter_key", lambda: "sk-or-test")
+    monkeypatch.setattr(U, "gpu_on_loan", lambda: True)       # remote call ignores the GPU loan
+    seen = {}
+    out = U.summarize_session("USER: set ARES_PASSWORD=hunter2correcthorse and fix caddy",
+                              title="Caddy", cwd="/x", box="ARES", http=_or_http(seen))
+    assert out == "Fixed the Caddy config on ARES."
+    prompt = seen["body"]["messages"][0]["content"]
+    assert "hunter2correcthorse" not in prompt and "[REDACTED]" in prompt
+    assert "fix caddy" in prompt and "Box: ARES" in prompt
+    assert seen["body"]["model"] == U.SUMMARY_MODEL
+
+
+def test_summarize_chat_redacts_asks(monkeypatch):
+    monkeypatch.setattr(U, "openrouter_key", lambda: "sk-or-test")
+    seen = {}
+    U.summarize_chat(["use key " + "sk-" + "ant-api03-AbCdEf123456GhIjKl789012"], http=_or_http(seen))
+    assert "AbCdEf123456" not in seen["body"]["messages"][0]["content"]
+
+
+def test_out_of_credit_propagates(monkeypatch):
+    monkeypatch.setattr(U, "openrouter_key", lambda: "sk-or-test")
+    def broke(key, body):
+        raise U.OutOfCredit("402")
+    import pytest
+    with pytest.raises(U.OutOfCredit):
+        U.summarize_session("USER: hi", http=broke)
+
+
+def test_transient_failure_returns_none(monkeypatch):
+    monkeypatch.setattr(U, "openrouter_key", lambda: "sk-or-test")
+    calls = {"n": 0}
+    def flaky(key, body):
+        calls["n"] += 1; raise RuntimeError("503")
+    assert U.summarize_session("USER: hi", http=flaky) is None
+    assert calls["n"] == 3

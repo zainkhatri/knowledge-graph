@@ -29,6 +29,9 @@ def main(argv=None):
     ic = sub.add_parser("index-chats"); ic.add_argument("--box", default="ARES")
     ic.add_argument("--root", default="/root/.claude/projects")
     ic.add_argument("--summary-budget", type=int, default=None)
+    ic.add_argument("--min-idle", type=int, default=900, help="seconds a session must be idle before summarizing")
+    ic.add_argument("--workers", type=int, default=8)
+    ic.add_argument("--no-summarize", action="store_true")
     ig = sub.add_parser("index-gpt"); ig.add_argument("--box", default="ARES")
     ig.add_argument("--dir", default="/mnt/nvme/PROMETHEUS/PERSONAL/GPT")
     ig.add_argument("--summary-budget", type=int, default=None)
@@ -61,7 +64,9 @@ def main(argv=None):
             print(link_boxes(st))
         elif a.cmd == "index-chats":
             from .chats import index_chats
-            print(index_chats(st, a.root, a.box, summary_budget=a.summary_budget))
+            print(index_chats(st, a.root, a.box, summarize=not a.no_summarize,
+                              summary_budget=a.summary_budget, min_idle=a.min_idle,
+                              workers=a.workers))
         elif a.cmd == "index-gpt":
             from .gpt import index_gpt
             print(index_gpt(st, a.dir, a.box, summary_budget=a.summary_budget))
