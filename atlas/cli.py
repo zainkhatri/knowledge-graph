@@ -45,6 +45,8 @@ def main(argv=None):
     ie = sub.add_parser("index-env"); ie.add_argument("--box", default="ARES")
     ie.add_argument("--home", default="/root/.claude"); ie.add_argument("--config", default="/root/.claude.json")
     sub.add_parser("link-workdirs")
+    ep = sub.add_parser("embed-pending"); ep.add_argument("--budget", type=int, default=5000)
+    ep.add_argument("--workers", type=int, default=4)
     ur = sub.add_parser("usage-report"); ur.add_argument("--days", type=int, default=7)
     ur.add_argument("--archive", default="/mnt/nvme/PROMETHEUS/PERSONAL/CLAUDE-CODE-SESSIONS")
     ur.add_argument("--log", default="/var/log/kg-usage.jsonl", help="append one JSON line here ('' = don't)")
@@ -89,6 +91,9 @@ def main(argv=None):
         elif a.cmd == "index-env":
             from .env import index_env
             print(index_env(st, a.box, [a.home, "/mnt/nvme/PROMETHEUS/.claude"], a.config))
+        elif a.cmd == "embed-pending":
+            from .embed_pending import embed_pending
+            print(embed_pending(st, a.budget, workers=a.workers))
         elif a.cmd == "link-workdirs":
             from .workdirs import link_workdirs
             print(link_workdirs(st))
