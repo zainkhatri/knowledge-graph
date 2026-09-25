@@ -1,6 +1,22 @@
 # Content indexing: OCR photos and extract text from documents
 
-Date: 2026-09-25. Status: approved (design approved in chat).
+Date: 2026-09-25. Status: shipped (council-reviewed 2026-09-25 — see below).
+
+## Shipped state
+- `atlas/content.py` + `kg index-content`, 11 tests including the vault-boundary
+  test the council flagged as non-negotiable (fixture tree with vault-pattern
+  paths → asserts zero `file-content` nodes, real function under test).
+- `tesseract-ocr` and `python3-docx` (Debian packages) installed on ARES.
+- `kg-content.timer` — nightly `03:00 America/Los_Angeles`, budget 2000
+  files/run, `TimeoutStartSec=7200`. Sized from a real measurement: Tesseract
+  averages ~2.5s/photo on full-resolution camera images, and the pool has
+  362,433 image files — the overwhelming majority of the "content" backlog.
+  2000/run stays safely under the 2-hour timeout even if a run hits an
+  all-images batch; first full pass over the whole pool takes ~6 months of
+  nightly runs, after which only new/changed files get reprocessed.
+- Script: `ARES-DASHBOARD/system/kg-content.sh`, following the existing
+  `kg-nightly.sh` conventions (Nice=10, IOSchedulingClass=idle, its own log at
+  `/var/log/kg-content.log`).
 
 ## Goal
 `kg_search` currently only matches folder-level summaries and chat text — it
