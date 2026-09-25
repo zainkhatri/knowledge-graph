@@ -22,16 +22,38 @@ def store():
 
 # ── tool implementations ──────────────────────────────────────────────────────
 
-def kg_search(query: str, limit: int = 15) -> list:
+SEARCH_LIMIT = 8        # was 15: most callers read the top few hits
+SEARCH_CLIP = 300       # chars of understanding per hit; kg_get returns the full text
+ASK_CLIP = 300
+_GET_DROP = ("embedding", "fingerprint", "size", "status")   # binary/bookkeeping; ~15K chars of noise
+
+
+def _clip(text, n):
+    text = (text or "").strip()
+    return text if len(text) <= n else text[:n].rstrip() + "…"
+
+
+def kg_search(query: str, limit: int = SEARCH_LIMIT) -> list:
     rows = store().search(query, limit=int(limit))
-    return [
-        {k: r[k] for k in ("id", "kind", "name", "understanding", "path") if k in r}
-        for r in rows
-    ]
+    out = []
+    for r in rows:
+        hit = {"id": r["id"], "kind": r.get("kind"), "name": r.get("name"),
+               "understanding": _clip(r.get("understanding"), SEARCH_CLIP)}
+        if r.get("kind") not in ("chat", "gpt-chat", "claude-chat") and r.get("path"):
+            hit["path"] = r["path"]              # folders/files: the path IS the answer
+        out.append(hit)
+    return out
 
 
 def kg_get(id: str) -> dict | None:
-    return store().get_node(id)
+    node = store().get_node(id)
+    if node is None:
+        return None
+    node = {k: v for k, v in node.items() if k not in _GET_DROP}
+    meta = node.get("meta")
+    if isinstance(meta, dict) and isinstance(meta.get("asks"), list):
+        node["meta"] = dict(meta, asks=[_clip(a, ASK_CLIP) for a in meta["asks"]])
+    return node
 
 
 def kg_neighbors(id: str, type: str | None = None) -> list:
@@ -78,13 +100,14 @@ TOOLS = [
             "context (what's on a box, where a service lives, past decisions/incidents) — it "
             "often already has the answer. Tries an exact match first, falls back to a "
             "broader match automatically. Returns matching nodes (id, kind, name, "
-            "understanding, path)."
+            "understanding clipped to 300 chars, path for folders). Call kg_get <id> for "
+            "the full text of a hit."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search terms"},
-                "limit": {"type": "integer", "default": 15, "description": "Max results"},
+                "limit": {"type": "integer", "default": 8, "description": "Max results"},
             },
             "required": ["query"],
         },
