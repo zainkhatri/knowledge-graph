@@ -146,61 +146,98 @@ class Store:
         "were","what","when","where","which","who","why","will","with","you","your",
     }
 
+    # Hybrid ranking, tuned on scripts/eval_search.py (known-item retrieval, 2026-09-25):
+    # exact-AND x3 + quorum-OR + semantic (cos >= 0.60), fused by reciprocal rank.
+    # vs the old "semantic only if keywords find nothing" tiers: title queries hit@1
+    # 0.873 -> 0.913, natural-language prompts hit@8 0.42 -> 0.66.
+    RRF_K = 60
+    POOL = 50
+    SIM_FLOOR = 0.60          # off-topic queries top out ~0.51-0.61; homelab ones ~0.69+
+    WEIGHTS = (3.0, 1.0, 1.0)  # (exact AND, quorum OR, semantic)
+    EMB_TTL = 600
+    QUORUM_CAP = 2
+
+    def _fts_ids(self, match, k):
+        return [r[0] for r in self.db.execute(
+            "SELECT f.id FROM nodes_fts f WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?", (match, k))]
+
+    def _quorum_or_ids(self, query, k):
+        """OR over content tokens, kept only if min(half of them, QUORUM_CAP) appear. The
+        cap matters for long natural-language queries: requiring 8 of 15 words threw away
+        good matches (eval hit@8 0.57 -> 0.66 with cap 2); 1 lets single-word noise in."""
+        tokens = [t for t in (query or "").split() if t and t.lower() not in self._STOPWORDS]
+        if len(tokens) < 2:
+            return []
+        rows = self.db.execute(
+            "SELECT n.id, n.name, n.understanding FROM nodes_fts f JOIN nodes n ON n.id=f.id"
+            " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?",
+            (self._fts_query(" ".join(tokens), joiner=" OR "), max(k, 60))).fetchall()
+        needed = max(1, min(-(-len(tokens) // 2), self.QUORUM_CAP))
+        low = [t.lower() for t in tokens]
+        scored = []
+        for i, r in enumerate(rows):
+            text = f"{r['name'] or ''} {r['understanding'] or ''}".lower()
+            overlap = sum(1 for t in low if t in text)
+            if overlap >= needed:
+                scored.append((-overlap, i, r["id"]))
+        scored.sort()
+        return [nid for _, _, nid in scored[:k]]
+
+    def _emb_matrix(self):
+        """(ids, row-normalized matrix), cached; rebuilt when the embedded count changes
+        or after EMB_TTL seconds (catches in-place re-embeds)."""
+        import time
+        n = self.db.execute("SELECT count(*) FROM nodes WHERE embedding IS NOT NULL").fetchone()[0]
+        c = getattr(self, "_emb_cache", None)
+        if c and c[0] == n and time.time() - c[1] < self.EMB_TTL:
+            return c[2], c[3]
+        ids, matrix = self.all_embedded()
+        if not ids:
+            self._emb_cache = (n, time.time(), [], None)
+            return [], None
+        import numpy as np
+        mn = matrix / (np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-9)
+        self._emb_cache = (n, time.time(), ids, mn)
+        return ids, mn
+
+    def _semantic_ids(self, query, k, embed_fn):
+        from . import embeddings as E
+        qvec = (embed_fn or E.embed)(query)
+        if qvec is None:
+            return []
+        ids, mn = self._emb_matrix()
+        if not ids:
+            return []           # also covers "numpy not installed"
+        import numpy as np
+        qv = np.asarray(qvec, dtype="float32")
+        if qv.shape[0] != mn.shape[1]:
+            return []
+        sims = mn @ (qv / (np.linalg.norm(qv) or 1.0))
+        order = np.argsort(-sims)[:k]
+        return [ids[i] for i in order if sims[i] >= self.SIM_FLOOR]
+
     def search(self, query, limit=20, embed_fn=None):
-        """Three tiers, stopping at the first with results: AND (exact) ->
-        quorum-OR (at least half the content tokens) -> semantic (cosine
-        similarity over embeddings, via Ollama). Tier 3 only runs when 1 and
-        2 both come back empty, so it adds zero latency to the common case."""
+        """Hybrid search: exact AND, quorum OR and semantic neighbours, merged by weighted
+        reciprocal-rank fusion. Exact matches dominate (weight 3); semantic hits are no
+        longer suppressed when keywords match. Degrades to keyword-only when Ollama/numpy
+        is unavailable."""
         and_match = self._fts_query(query)
         if not and_match:
             return []
-        rows = self.db.execute(
-            "SELECT n.* FROM nodes_fts f JOIN nodes n ON n.id=f.id"
-            " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?", (and_match, limit)).fetchall()
-        if rows:
-            return [self._row(r) for r in rows]
-        content_tokens = [t for t in (query or "").split() if t and t.lower() not in self._STOPWORDS]
-        if len(content_tokens) >= 2:
-            or_match = self._fts_query(" ".join(content_tokens), joiner=" OR ")
-            pool_size = max(limit * 4, 60)
-            candidates = self.db.execute(
-                "SELECT n.* FROM nodes_fts f JOIN nodes n ON n.id=f.id"
-                " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?", (or_match, pool_size)).fetchall()
-            needed = max(1, -(-len(content_tokens) // 2))   # ceil(n/2)
-            lowered = [t.lower() for t in content_tokens]
-            scored = []
-            for i, r in enumerate(candidates):
-                text = f"{r['name'] or ''} {r['understanding'] or ''}".lower()
-                overlap = sum(1 for t in lowered if t in text)
-                if overlap >= needed:
-                    scored.append((-overlap, i, r))
-            scored.sort()
-            if scored:
-                return [self._row(r) for _, _, r in scored[:limit]]
-        # tier 3: semantic
-        from . import embeddings as E
-        embed_fn = embed_fn or E.embed
-        qvec = embed_fn(query)
-        if qvec is None:
+        lists = (self._fts_ids(and_match, self.POOL),
+                 self._quorum_or_ids(query, self.POOL),
+                 self._semantic_ids(query, self.POOL, embed_fn))
+        score = {}
+        for w, ids in zip(self.WEIGHTS, lists):
+            for rank, nid in enumerate(ids):
+                score[nid] = score.get(nid, 0.0) + w / (self.RRF_K + rank + 1)
+        top = sorted(score, key=lambda nid: -score[nid])[:int(limit)]
+        if not top:
             return []
-        ids, matrix = self.all_embedded()
-        if not ids:
-            return []   # also covers "numpy not installed" — all_embedded() returns [] for that too
-        import numpy as np
-        qv = np.asarray(qvec, dtype="float32")
-        qn = qv / (np.linalg.norm(qv) or 1.0)
-        mn = matrix / (np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-9)
-        sims = mn @ qn
-        order = np.argsort(-sims)
-        SIM_FLOOR = 0.5   # starting point — tune against the historical-query
-                          # replay harness (see docs/plans/2026-09-19-atlas-semantic-search.md Task 6)
-        top_ids = [ids[i] for i in order[:limit] if sims[i] >= SIM_FLOOR]
-        if not top_ids:
-            return []
-        ph = ",".join("?" * len(top_ids))
-        rows = self.db.execute(f"SELECT * FROM nodes WHERE id IN ({ph})", top_ids).fetchall()
+        ph = ",".join("?" * len(top))
+        rows = self.db.execute(f"SELECT * FROM nodes WHERE id IN ({ph})", top).fetchall()
         by_id = {r["id"]: self._row(r) for r in rows}
-        return [by_id[i] for i in top_ids if i in by_id]
+        return [by_id[i] for i in top if i in by_id]
 
     def merge_from(self, other_path, box):
         src = sqlite3.connect(f"file:{other_path}?mode=ro", uri=True)

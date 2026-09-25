@@ -142,15 +142,52 @@ def test_semantic_fallback_returns_empty_when_embed_fails(tmp_path):
     assert st.search("nonsense query words", embed_fn=failing_embed) == []
     st.close()
 
-def test_and_match_still_wins_without_calling_embed_fn(tmp_path):
+def _node(st, nid, und, vec=None):
+    st.upsert_node({"id": nid, "box": "ARES", "kind": "chat", "path": nid, "name": nid,
+                    "understanding": und, "fingerprint": "f", "size": 0, "mtime": 1,
+                    "status": "live", "meta": {}, "embedding": st.vec_to_blob(vec) if vec else None})
+
+
+def test_hybrid_returns_keyword_and_semantic_hits_exact_first(tmp_path):
     st = Store(str(tmp_path / "kg.db"))
-    st.upsert_node({"id": "ARES:/x", "box": "ARES", "kind": "dataset", "path": "/x",
-                    "name": "x", "understanding": "zeus backup vault", "fingerprint": "f",
-                    "size": 0, "mtime": 1, "status": "live", "meta": {}})
-    called = {"n": 0}
-    def fake_embed(text, http=None):
-        called["n"] += 1; return [1.0]
-    hits = st.search("zeus backup", embed_fn=fake_embed)
-    assert len(hits) == 1
-    assert called["n"] == 0   # AND already matched — semantic tier never invoked
+    _node(st, "kw", "zeus backup vault", [0.0, 1.0, 0.0])          # exact keyword hit, far vector
+    _node(st, "sem", "nightly horcrux pull", [1.0, 0.0, 0.0])      # no shared words, close vector
+    _node(st, "far", "banana bread recipe", [0.0, 0.0, 1.0])       # neither
+    hits = [h["id"] for h in st.search("zeus backup", embed_fn=lambda t, http=None: [0.95, 0.05, 0.0])]
+    assert hits[0] == "kw"                 # exact keyword match stays on top
+    assert "sem" in hits                   # semantic neighbour is no longer suppressed
+    assert "far" not in hits
+    st.close()
+
+
+def test_semantic_floor_drops_weak_neighbours(tmp_path):
+    st = Store(str(tmp_path / "kg.db"))
+    _node(st, "weak", "something else", [0.5, 0.866, 0.0])         # cos 0.5 to the query
+    assert st.search("image archive", embed_fn=lambda t, http=None: [1.0, 0.0, 0.0]) == []
+    st.close()
+
+
+def test_keyword_hits_survive_embed_failure(tmp_path):
+    st = Store(str(tmp_path / "kg.db"))
+    _node(st, "kw", "zeus backup vault", [1.0, 0.0])
+    hits = st.search("zeus backup", embed_fn=lambda t, http=None: None)
+    assert [h["id"] for h in hits] == ["kw"]
+    st.close()
+
+
+def test_embedding_matrix_cache_sees_new_vectors(tmp_path):
+    st = Store(str(tmp_path / "kg.db"))
+    _node(st, "a", "alpha", [1.0, 0.0])
+    q = lambda t, http=None: [0.0, 1.0]
+    assert st.search("zzz qqq", embed_fn=q) == []
+    _node(st, "b", "beta", [0.0, 1.0])                              # new vector after first search
+    assert [h["id"] for h in st.search("zzz qqq", embed_fn=q)] == ["b"]
+    st.close()
+
+
+def test_long_query_matches_on_two_content_words(tmp_path):
+    st = Store(str(tmp_path / "kg.db"))
+    _node(st, "hit", "moonlight streaming lag fixed on vm200")
+    q = "why is moonlight so laggy when i stream games from the windows vm to my mac tonight"
+    assert [h["id"] for h in st.search(q, embed_fn=lambda t, http=None: None)] == ["hit"]
     st.close()
