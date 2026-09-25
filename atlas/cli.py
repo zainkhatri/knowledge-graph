@@ -44,6 +44,7 @@ def main(argv=None):
     iw.add_argument("--dir", required=True); iw.add_argument("--summary-budget", type=int, default=None)
     ie = sub.add_parser("index-env"); ie.add_argument("--box", default="ARES")
     ie.add_argument("--home", default="/root/.claude"); ie.add_argument("--config", default="/root/.claude.json")
+    sub.add_parser("link-workdirs")
     ur = sub.add_parser("usage-report"); ur.add_argument("--days", type=int, default=7)
     ur.add_argument("--archive", default="/mnt/nvme/PROMETHEUS/PERSONAL/CLAUDE-CODE-SESSIONS")
     ur.add_argument("--log", default="/var/log/kg-usage.jsonl", help="append one JSON line here ('' = don't)")
@@ -88,6 +89,9 @@ def main(argv=None):
         elif a.cmd == "index-env":
             from .env import index_env
             print(index_env(st, a.box, [a.home, "/mnt/nvme/PROMETHEUS/.claude"], a.config))
+        elif a.cmd == "link-workdirs":
+            from .workdirs import link_workdirs
+            print(link_workdirs(st))
         elif a.cmd == "usage-report":
             from .usage import report
             r = report(a.archive, a.days)
