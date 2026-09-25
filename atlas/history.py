@@ -63,14 +63,15 @@ def index_history(store, path, box="ARES", summarize=True, summary_budget=None,
         cwd = rows[0].get("project") or ""
         date = time.strftime("%Y-%m-%d", time.localtime(rows[0]["timestamp"] / 1000))
         sampled = _sample(asks)
+        gen = ((prev or {}).get("meta") or {}).get("gen_title") or ""
         node = {
             "id": cid, "box": box, "kind": "chat", "path": src,
-            "name": f"{date} · {pick_title(asks)}",
+            "name": f"{date} · {gen or pick_title(asks)}",
             "understanding": (prev["understanding"] if fresh else
                               " · ".join(a[:200] for a in sampled)[:1500]),
             "mtime": int(last), "fingerprint": fp, "status": "raw",
             "meta": {"session": sid, "cwd": cwd, "turns": len(asks), "asks": sampled,
-                     "title": "", "source": "history",
+                     "title": "", "source": "history", "gen_title": gen,
                      "last_ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(last))},
             "embedding": prev.get("embedding") if prev else None,
         }

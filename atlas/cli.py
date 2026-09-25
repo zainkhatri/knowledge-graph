@@ -46,6 +46,8 @@ def main(argv=None):
     ie.add_argument("--home", default="/root/.claude"); ie.add_argument("--config", default="/root/.claude.json")
     sub.add_parser("link-workdirs")
     sub.add_parser("fix-names")
+    gt = sub.add_parser("gen-titles"); gt.add_argument("--budget", type=int, default=5000)
+    gt.add_argument("--workers", type=int, default=8)
     ep = sub.add_parser("embed-pending"); ep.add_argument("--budget", type=int, default=5000)
     ep.add_argument("--workers", type=int, default=4)
     ur = sub.add_parser("usage-report"); ur.add_argument("--days", type=int, default=7)
@@ -95,6 +97,9 @@ def main(argv=None):
         elif a.cmd == "embed-pending":
             from .embed_pending import embed_pending
             print(embed_pending(st, a.budget, workers=a.workers))
+        elif a.cmd == "gen-titles":
+            from .titles import gen_titles
+            print(gen_titles(st, a.budget, a.workers))
         elif a.cmd == "fix-names":
             from .names import fix_names
             print(fix_names(st))

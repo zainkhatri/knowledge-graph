@@ -70,8 +70,9 @@ def _node_for(path, box, sid, tr, fp, mt, prev):
     sampled = _sample(asks)
     date = _date(path, tr["first_ts"])
     from .names import pick_title
-    first = tr["title"] or (pick_title(asks, tr["summary"]) if (asks or tr["summary"]) else "") \
-        or f"session {sid[:8]}"
+    gen = ((prev or {}).get("meta") or {}).get("gen_title") or ""    # atlas.titles, kept across re-index
+    first = tr["title"] or gen or \
+        (pick_title(asks, tr["summary"]) if (asks or tr["summary"]) else "") or f"session {sid[:8]}"
     name = (f"{date} · " if date else "") + first[:90]
     raw = " · ".join(x for x in [tr["title"], tr["summary"]] if x)
     raw = ((raw + " · ") if raw else "") + " · ".join(a[:200] for a in sampled)
@@ -81,7 +82,8 @@ def _node_for(path, box, sid, tr, fp, mt, prev):
         "id": f"{box}:chat/{sid}", "box": box, "kind": "chat", "path": path, "name": name,
         "understanding": und, "mtime": mt, "fingerprint": fp, "status": "raw",
         "meta": {"session": sid, "cwd": tr["cwd"] or "", "turns": len(asks), "asks": sampled,
-                 "title": tr["title"] or "", "last_ts": tr["last_ts"] or "", "sv": sv},
+                 "title": tr["title"] or "", "last_ts": tr["last_ts"] or "", "sv": sv,
+                 "gen_title": gen},
         "embedding": prev.get("embedding") if prev else None,
     }
 
