@@ -44,6 +44,8 @@ def main(argv=None):
     iw.add_argument("--dir", required=True); iw.add_argument("--summary-budget", type=int, default=None)
     ie = sub.add_parser("index-env"); ie.add_argument("--box", default="ARES")
     ie.add_argument("--home", default="/root/.claude"); ie.add_argument("--config", default="/root/.claude.json")
+    ict = sub.add_parser("index-content"); ict.add_argument("root"); ict.add_argument("--box", default="ARES")
+    ict.add_argument("--budget", type=int, default=500)
     sub.add_parser("link-workdirs")
     sub.add_parser("fix-names")
     gt = sub.add_parser("gen-titles"); gt.add_argument("--budget", type=int, default=5000)
@@ -94,6 +96,9 @@ def main(argv=None):
         elif a.cmd == "index-env":
             from .env import index_env
             print(index_env(st, a.box, [a.home, "/mnt/nvme/PROMETHEUS/.claude"], a.config))
+        elif a.cmd == "index-content":
+            from .content import index_content
+            print(index_content(st, a.root, a.box, budget=a.budget))
         elif a.cmd == "embed-pending":
             from .embed_pending import embed_pending
             print(embed_pending(st, a.budget, workers=a.workers))
