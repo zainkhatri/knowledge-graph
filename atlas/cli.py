@@ -45,6 +45,7 @@ def main(argv=None):
     ie = sub.add_parser("index-env"); ie.add_argument("--box", default="ARES")
     ie.add_argument("--home", default="/root/.claude"); ie.add_argument("--config", default="/root/.claude.json")
     sub.add_parser("link-workdirs")
+    sub.add_parser("fix-names")
     ep = sub.add_parser("embed-pending"); ep.add_argument("--budget", type=int, default=5000)
     ep.add_argument("--workers", type=int, default=4)
     ur = sub.add_parser("usage-report"); ur.add_argument("--days", type=int, default=7)
@@ -94,6 +95,9 @@ def main(argv=None):
         elif a.cmd == "embed-pending":
             from .embed_pending import embed_pending
             print(embed_pending(st, a.budget, workers=a.workers))
+        elif a.cmd == "fix-names":
+            from .names import fix_names
+            print(fix_names(st))
         elif a.cmd == "link-workdirs":
             from .workdirs import link_workdirs
             print(link_workdirs(st))

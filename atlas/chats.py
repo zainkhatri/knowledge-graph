@@ -69,7 +69,9 @@ def _node_for(path, box, sid, tr, fp, mt, prev):
     asks = tr["asks"]
     sampled = _sample(asks)
     date = _date(path, tr["first_ts"])
-    first = tr["title"] or (asks[0] if asks else tr["summary"]) or f"session {sid[:8]}"
+    from .names import pick_title
+    first = tr["title"] or (pick_title(asks, tr["summary"]) if (asks or tr["summary"]) else "") \
+        or f"session {sid[:8]}"
     name = (f"{date} · " if date else "") + first[:90]
     raw = " · ".join(x for x in [tr["title"], tr["summary"]] if x)
     raw = ((raw + " · ") if raw else "") + " · ".join(a[:200] for a in sampled)

@@ -39,6 +39,7 @@ def index_history(store, path, box="ARES", summarize=True, summary_budget=None,
                   min_idle=900, workers=8, now=None, embed_fn=None):
     from .chats import _ensure_hub, _anchor, _sample, _summarize_batch
     from .transcript import digest as make_digest
+    from .names import pick_title
     from . import understanding as U
     from . import embeddings as E
     embed_fn = embed_fn or E.embed
@@ -64,7 +65,7 @@ def index_history(store, path, box="ARES", summarize=True, summary_budget=None,
         sampled = _sample(asks)
         node = {
             "id": cid, "box": box, "kind": "chat", "path": src,
-            "name": f"{date} · {asks[0][:90]}",
+            "name": f"{date} · {pick_title(asks)}",
             "understanding": (prev["understanding"] if fresh else
                               " · ".join(a[:200] for a in sampled)[:1500]),
             "mtime": int(last), "fingerprint": fp, "status": "raw",
