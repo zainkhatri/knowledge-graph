@@ -7,13 +7,20 @@ Date: 2026-09-25. Status: shipped (council-reviewed 2026-09-25 — see below).
   test the council flagged as non-negotiable (fixture tree with vault-pattern
   paths → asserts zero `file-content` nodes, real function under test).
 - `tesseract-ocr` and `python3-docx` (Debian packages) installed on ARES.
-- `kg-content.timer` — nightly `03:00 America/Los_Angeles`, budget 2000
-  files/run, `TimeoutStartSec=7200`. Sized from a real measurement: Tesseract
-  averages ~2.5s/photo on full-resolution camera images, and the pool has
-  362,433 image files — the overwhelming majority of the "content" backlog.
-  2000/run stays safely under the 2-hour timeout even if a run hits an
-  all-images batch; first full pass over the whole pool takes ~6 months of
-  nightly runs, after which only new/changed files get reprocessed.
+- `kg-content.timer` — nightly `03:00 America/Los_Angeles`. Runs in three
+  staged passes, not one pool-wide walk, so the actual photo backlog gets
+  priority instead of waiting behind alphabetically-earlier folders:
+  1. `PERSONAL/id` (budget 200) — small, catches up fast.
+  2. `PHOTOS/` (budget 5000) — the real backlog (52K+ photos).
+  3. Whole pool (budget 300) — makes incremental progress everywhere else.
+  `TimeoutStartSec=14400` (4h). Sizing: the first pool-wide run measured
+  ~0.74-0.87s/file blended (faster than the initial 2.5s/photo raw-Tesseract
+  benchmark on full-resolution camera originals, since `PHOTOS/` has a mix of
+  sizes); 5000 photos costs ~65-75min at that rate, with the wider timeout as
+  margin for a batch of larger files. A timeout kill is safe, not corrupting
+  — each file's node is written as soon as it's OCR'd, so a cut-off run just
+  resumes next night via the per-file fingerprint. At 5000/night, `PHOTOS/`
+  alone should clear its backlog in about a week.
 - Script: `ARES-DASHBOARD/system/kg-content.sh`, following the existing
   `kg-nightly.sh` conventions (Nice=10, IOSchedulingClass=idle, its own log at
   `/var/log/kg-content.log`).
