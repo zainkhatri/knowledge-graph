@@ -25,6 +25,35 @@ Date: 2026-09-25. Status: shipped (council-reviewed 2026-09-25 — see below).
   `kg-nightly.sh` conventions (Nice=10, IOSchedulingClass=idle, its own log at
   `/var/log/kg-content.log`).
 
+## Incident: vault-exclusion gap (2026-09-27), fixed same day
+The 2026-09-27 03:00 run OCR'd 3 real files under `PHOTOS/.vault/` — the
+actual "My Eyes Only" storage path (`ARES-DASHBOARD/app.py`'s
+`_VAULT_ORIGINALS_DIR`). Root cause: `default_vault_pred()`'s patterns were
+literal substrings (`"my eyes only"`, `"/vault"`, `"vault-secure"`), and
+`/.vault/` does not contain the substring `/vault` — the dot sits between
+the slash and "vault". This is exactly the failure mode the pre-build
+council review flagged as the one thing worth a dedicated test; the test
+written for it (`test_vault_paths_are_never_indexed`) used the configured
+patterns, not the real on-disk convention, so it passed while the actual
+path was never exercised.
+
+Impact was contained: the 3 photos' OCR output was empty (no text found in
+those specific images), so no sensitive *text* ever entered the FTS index —
+but their file paths/names did become graph nodes, and the files were opened
+and processed, which the vault boundary is supposed to prevent regardless of
+outcome. A pool-wide scan confirmed no other dot-directory content had
+leaked (everything else with a dot-component was either already correctly
+caught as a `vault` stub node, or a benign dev-tool folder like `.claude`).
+
+Fix: `default_vault_pred()` now also excludes any path with a dot-prefixed
+component (`atlas/walker.py:_has_dot_dir_component`), matching
+`ARES-DASHBOARD/photos/photo_scanner.py`'s own stated rule ("skip named dirs
+and any dot-directory (includes .vault)") instead of a curated substring
+list. Broader on purpose — a missed hidden folder costs nothing; a leaked
+one does not. `test_dot_vault_directory_is_never_indexed` locks this in
+using the real `.vault` path. The 6 leaked nodes (3 folders, 3 photos) were
+purged from `nodes`/`nodes_fts`/`edges` on discovery.
+
 ## Goal
 `kg_search` currently only matches folder-level summaries and chat text — it
 has zero visibility into what's actually inside a file. Add a new indexing
