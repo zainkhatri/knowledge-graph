@@ -34,6 +34,36 @@ def test_vault_paths_are_never_indexed(tmp_path):
     st.close()
 
 
+def test_dot_vault_directory_is_never_indexed(tmp_path):
+    # Regression test: PHOTOS_ROOT/.vault/ is the REAL, actual vault storage
+    # path used by ARES-DASHBOARD (app.py's _VAULT_ORIGINALS_DIR) — a
+    # dot-prefixed hidden directory, not one of the literal substrings
+    # ("my eyes only", "/vault", "vault-secure") the predicate originally
+    # checked for. "/.vault/" does NOT contain the substring "/vault" (the
+    # dot sits between the slash and "vault"), so the old predicate walked
+    # straight into it. 3 real photos were OCR'd into the graph before this
+    # was caught and purged (2026-09-27) — this test locks in the fix.
+    root = str(tmp_path / "pool")
+    _write(root, "PHOTOS/.vault/iPhone/2026/09/IMG_5390.JPG", "not a real image")
+    _write(root, "PHOTOS/G7X/IMG_0001.JPG", "not a real image either")
+
+    called = []
+    def spy_tesseract(path):
+        called.append(path)
+        return "should never see vault content"
+
+    st = Store(str(tmp_path / "kg.db"))
+    stats = index_content(st, root, box="ARES", tesseract=spy_tesseract, budget=100)
+
+    assert stats["skipped_vault"] >= 1
+    for path in called:
+        assert ".vault" not in path
+    assert st.get_node("ARES:" + os.path.join(root, "PHOTOS", ".vault", "iPhone", "2026", "09", "IMG_5390.JPG")) is None
+    # the sibling non-vault photo still gets processed normally
+    assert st.get_node("ARES:" + os.path.join(root, "PHOTOS", "G7X", "IMG_0001.JPG")) is not None
+    st.close()
+
+
 def test_vault_file_matched_directly_is_also_skipped(tmp_path):
     # defense in depth: a file matching the vault pattern even outside a
     # vault-named directory must still never be opened or indexed.

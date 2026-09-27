@@ -96,10 +96,23 @@ def walk(root, box, vault_pred=None, fp=None):
                     continue
                 stack.append((os.path.join(path, d), nid, depth + 1))
 
+def _has_dot_dir_component(path):
+    """True if any path component is a hidden ("dot") directory/file name,
+    e.g. '.vault'. The ARES photo gallery's actual vault storage is
+    PHOTOS_ROOT/.vault/ (see ARES-DASHBOARD/app.py's _VAULT_ORIGINALS_DIR) —
+    a real path that the substring patterns below never matched, since
+    '/.vault/' contains '.vault' but not the literal substring '/vault'.
+    Content indexing walked into it and OCR'd 3 real files before this was
+    caught (purged from the graph on discovery, 2026-09-27). Skipping every
+    dot-component is deliberately broader than "known vault names" — a
+    missed hidden folder costs nothing here; a leaked one does not."""
+    return any(part.startswith(".") for part in path.split(os.sep) if part)
+
+
 def default_vault_pred():
     pats = [p.strip().lower() for p in
             os.getenv("VAULT_PATHS", "my eyes only,/vault,vault-secure").split(",") if p.strip()]
     def pred(path):
         pl = path.lower()
-        return any(p in pl for p in pats)
+        return _has_dot_dir_component(path) or any(p in pl for p in pats)
     return pred
