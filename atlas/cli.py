@@ -56,6 +56,7 @@ def main(argv=None):
     ur.add_argument("--archive", default="/mnt/nvme/PROMETHEUS/PERSONAL/CLAUDE-CODE-SESSIONS")
     ur.add_argument("--log", default="/var/log/kg-usage.jsonl", help="append one JSON line here ('' = don't)")
     sm = sub.add_parser("summarize-pending"); sm.add_argument("--budget", type=int, default=500)
+    pr = sub.add_parser("prune"); pr.add_argument("--dry-run", action="store_true")
     sub.add_parser("stat")
     a = ap.parse_args(argv)
     st = Store(_db_path())
@@ -121,6 +122,9 @@ def main(argv=None):
         elif a.cmd == "summarize-pending":
             from .chats import summarize_pending
             print(summarize_pending(st, a.budget))
+        elif a.cmd == "prune":
+            from .prune import prune_excluded
+            print(prune_excluded(st, dry_run=a.dry_run))
         elif a.cmd == "stat":
             c = st.db.execute("SELECT count(*) c FROM nodes").fetchone()["c"]
             e = st.db.execute("SELECT count(*) c FROM edges").fetchone()["c"]

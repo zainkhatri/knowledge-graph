@@ -21,7 +21,11 @@ IGNORE_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__",
                "pg_stat_tmp", "pg_tblspc", "pg_dynshmem", "pg_commit_ts",
                "pg_subtrans", "pg_wal", "pg_xlog",
                # Filesystem/OS reserved dirs — never real content
-               "lost+found", ".lost+found"}
+               "lost+found", ".lost+found",
+               # Raw Claude Code session archive — index-chats already turns each
+               # session into a summarized chat node; the tool-results dumps inside
+               # were 1 in 4 of all top-8 search hits (2026-09-28 replay).
+               "CLAUDE-CODE-SESSIONS"}
 
 def node_id(box, path):
     return f"{box}:{path}"

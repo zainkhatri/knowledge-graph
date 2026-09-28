@@ -1,4 +1,4 @@
-import os, hashlib, json, base64, subprocess, shutil
+import os, re, hashlib, json, base64, subprocess, shutil
 from . import understanding as U
 from .walker import IGNORE_DIRS, default_vault_pred, node_id
 
@@ -9,6 +9,20 @@ TEXT_EXT = {".txt", ".md"}
 SUPPORTED_EXT = IMAGE_EXT | PDF_EXT | DOCX_EXT | TEXT_EXT
 TEXT_CAP = 200_000  # ~200KB; past this, txt/md content is truncated
 OCR_MIN_ALNUM = 8   # tesseract output below this is "no real text" -> try vision fallback
+_WORD = re.compile(r"[A-Za-z]{3,}")
+_ID = re.compile(r"[A-Za-z0-9]{8,}")
+MIN_WORDS = 3       # below this, OCR is glyph noise ("a i <> x"), not searchable text
+
+
+def has_text(text):
+    """True if extracted text is worth a search entry: MIN_WORDS real words, or an
+    ID-like token (VIN, policy or account number: 8+ alnum with a digit)."""
+    text = text or ""
+    if len(_WORD.findall(text)) >= MIN_WORDS:
+        return True
+    return any(any(c.isdigit() for c in t) for t in _ID.findall(text))
+
+
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "llava:7b")
 
 
@@ -209,7 +223,10 @@ def index_content(store, root, box="ARES", vault_pred=None, budget=500,
             store.upsert_node({
                 "id": nid, "box": box, "kind": "file-content", "path": path,
                 "name": fname, "understanding": text, "fingerprint": fp,
-                "size": st.st_size, "mtime": int(st.st_mtime), "status": "live",
+                "size": st.st_size, "mtime": int(st.st_mtime),
+                # "empty" rows stay as fingerprint markers (no nightly re-OCR) but are
+                # kept out of FTS and embedding by Store.upsert_node / embed_pending.
+                "status": "live" if has_text(text) else "empty",
                 "meta": {"method": method, "ext": ext, "truncated": truncated},
             })
             store.add_edge(node_id(box, dirpath), nid, "contains")

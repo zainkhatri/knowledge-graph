@@ -196,3 +196,52 @@ def test_file_fingerprint_changes_with_mtime_and_size():
     fp3 = file_fingerprint(FakeStat(100, 10))
     assert fp1 != fp2
     assert fp1 == fp3
+
+
+def test_session_archive_is_never_indexed(tmp_path):
+    # Raw session dumps (tool-results/*.txt) duplicate the summarized chat nodes
+    # and were 1 in 4 of all top-8 search hits before this exclusion (2026-09-28).
+    root = str(tmp_path / "pool")
+    _write(root, "PERSONAL/CLAUDE-CODE-SESSIONS/ARES/proj/abc/tool-results/b1.txt", "grep output noise")
+    _write(root, "PERSONAL/notes.txt", "a real note about the backup chain")
+
+    st = Store(str(tmp_path / "kg.db"))
+    index_content(st, root, box="ARES", budget=100)
+
+    assert st.get_node("ARES:" + os.path.join(root, "PERSONAL/notes.txt")) is not None
+    dump = os.path.join(root, "PERSONAL/CLAUDE-CODE-SESSIONS/ARES/proj/abc/tool-results/b1.txt")
+    assert st.get_node("ARES:" + dump) is None
+    st.close()
+
+
+def test_near_empty_ocr_is_kept_as_marker_but_not_searchable(tmp_path):
+    root = str(tmp_path / "pool")
+    _write(root, "PHOTOS/IMG_0001.JPG", "not a real image")
+    _write(root, "PHOTOS/IMG_0002.JPG", "not a real image")
+    ocr = {"IMG_0001.JPG": "a i\n<> x qwzt", "IMG_0002.JPG": "zebra crossing sign downtown"}
+    calls = []
+    def fake_tesseract(path):
+        calls.append(path)
+        return ocr[os.path.basename(path)]
+
+    st = Store(str(tmp_path / "kg.db"))
+    index_content(st, root, box="ARES", tesseract=fake_tesseract, vision=lambda p: None, budget=100)
+
+    empty = st.get_node("ARES:" + os.path.join(root, "PHOTOS/IMG_0001.JPG"))
+    assert empty is not None and empty["status"] == "empty"
+    assert [n["name"] for n in st.search("qwzt")] == []
+    assert [n["name"] for n in st.search("zebra crossing")] == ["IMG_0002.JPG"]
+
+    calls.clear()
+    index_content(st, root, box="ARES", tesseract=fake_tesseract, vision=lambda p: None, budget=100)
+    assert calls == []          # fingerprint marker means no re-OCR next night
+    st.close()
+
+
+def test_has_text_keeps_ids_and_real_words():
+    from atlas.content import has_text
+    assert has_text("VIN JNKCV64E98M119577")
+    assert has_text("Soy El leader de Santos")
+    assert not has_text("Mom\n6/2/21, 4:03 PM")
+    assert not has_text("¢ & & & & <> ¢€> €>")
+    assert not has_text("")

@@ -72,8 +72,9 @@ class Store:
                  node.get("understanding"), node.get("fingerprint"), node.get("size"),
                  node.get("mtime"), node.get("status", "live"), meta, node.get("embedding")))
             self.db.execute("DELETE FROM nodes_fts WHERE id=?", (node["id"],))
-            self.db.execute("INSERT INTO nodes_fts(id,name,understanding) VALUES(?,?,?)",
-                            (node["id"], node.get("name") or "", node.get("understanding") or ""))
+            if node.get("status") != "empty":       # empty = marker row, never a search hit
+                self.db.execute("INSERT INTO nodes_fts(id,name,understanding) VALUES(?,?,?)",
+                                (node["id"], node.get("name") or "", node.get("understanding") or ""))
 
     def get_node(self, node_id):
         r = self.db.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
