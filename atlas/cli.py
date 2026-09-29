@@ -24,6 +24,7 @@ def main(argv=None):
     tr = sub.add_parser("tree"); tr.add_argument("id"); tr.add_argument("--depth", type=int, default=2)
     rx = sub.add_parser("reindex"); rx.add_argument("root"); rx.add_argument("--box", default="ARES")
     rx.add_argument("--retry-budget", type=int, default=500)
+    rx.add_argument("--deadline", type=int, default=None, help="seconds of generation before deferring the rest")
     mg = sub.add_parser("merge"); mg.add_argument("other"); mg.add_argument("--box", required=True)
     sub.add_parser("link-boxes")
     ic = sub.add_parser("index-chats"); ic.add_argument("--box", default="ARES")
@@ -74,7 +75,7 @@ def main(argv=None):
             _tree(st, a.id, a.depth, 0)
         elif a.cmd == "reindex":
             from .collect import collect
-            print(collect(st, a.root, a.box, retry_budget=a.retry_budget))
+            print(collect(st, a.root, a.box, retry_budget=a.retry_budget, deadline=a.deadline))
         elif a.cmd == "merge":
             print(st.merge_from(a.other, a.box))
         elif a.cmd == "link-boxes":

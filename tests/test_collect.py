@@ -114,3 +114,45 @@ def test_collect_vault_nodes_never_embedded(tmp_path):
     vnode = st.get_node("ARES:" + str(v))
     assert vnode["embedding"] is None
     st.close()
+
+
+def test_collect_stops_generating_at_deadline_and_resumes_next_run(tmp_path):
+    # EROS GPU contention (2026-09-23) tripled per-folder summary time, so the
+    # uncapped deep backfill hit its 1h systemd timeout every night. A deadline
+    # makes the run finish cleanly; unreached folders keep no fingerprint so the
+    # next run regenerates them.
+    root = str(tmp_path / "root")
+    os.makedirs(root)
+    build_tree(root)
+    st = Store(str(tmp_path / "kg.db"))
+    clock = {"t": 0.0}
+    calls = []
+    def gen(node, kids):
+        calls.append(node["path"]); clock["t"] += 10; return f"u:{node['name']}"
+    res = collect(st, root, "ARES", gen=gen, embed_fn=lambda t: None,
+                  deadline=15, now=lambda: clock["t"])
+    assert len(calls) == 2 and res["deferred"] == res["nodes"] - 2
+    deferred = [n for n in (st.get_node("ARES:" + p) for p in (root, os.path.join(root, "projA"), os.path.join(root, "projA", "src")))
+                if n and not n["understanding"]]
+    assert deferred and all(n["fingerprint"] is None for n in deferred)
+
+    calls.clear()
+    res2 = collect(st, root, "ARES", gen=gen, embed_fn=lambda t: None)
+    assert res2["deferred"] == 0 and len(calls) == res["deferred"]
+    st.close()
+
+
+def test_collect_does_not_rewrite_unchanged_nodes(tmp_path):
+    # Each upsert rewrites the FTS row, which scans nodes_fts by its UNINDEXED id
+    # (~12 ms at 37K rows). Rewriting 16K unchanged folders cost ~8 min per run.
+    root = str(tmp_path / "root")
+    os.makedirs(root)
+    build_tree(root)
+    st = Store(str(tmp_path / "kg.db"))
+    collect(st, root, "ARES", gen=lambda n, k: f"u:{n['name']}", embed_fn=lambda t: None)
+    writes = []
+    orig = st.upsert_node
+    st.upsert_node = lambda node: (writes.append(node["id"]), orig(node))
+    collect(st, root, "ARES", gen=lambda n, k: f"u:{n['name']}", embed_fn=lambda t: None)
+    assert writes == []
+    st.close()
