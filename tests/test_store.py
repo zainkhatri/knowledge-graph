@@ -191,3 +191,15 @@ def test_long_query_matches_on_two_content_words(tmp_path):
     q = "why is moonlight so laggy when i stream games from the windows vm to my mac tonight"
     assert [h["id"] for h in st.search(q, embed_fn=lambda t, http=None: None)] == ["hit"]
     st.close()
+
+
+def test_file_content_is_damped_below_an_equally_matching_chat(tmp_path):
+    # Long docs match many query words; without damping they pushed the session a
+    # query was looking for off #1 (known-item hit@1 0.407 -> 0.327, 2026-09-28).
+    st = Store(str(tmp_path / "kg.db"))
+    for nid, kind in (("ARES:/p/spec.md", "file-content"), ("ARES:chat/1", "chat")):
+        st.upsert_node({"id": nid, "box": "ARES", "kind": kind, "path": nid[5:], "name": "x",
+                        "understanding": "camera import over ccapi"})
+    ids = [r["id"] for r in st.search("camera ccapi import", embed_fn=lambda t, http=None: None)]
+    assert ids == ["ARES:chat/1", "ARES:/p/spec.md"]
+    st.close()

@@ -157,6 +157,11 @@ class Store:
     WEIGHTS = (3.0, 1.0, 1.0)  # (exact AND, quorum OR, semantic)
     EMB_TTL = 600
     QUORUM_CAP = 2
+    # file-content x0.3: extracted docs match many words by sheer length and pushed
+    # sessions off #1. Tuned 2026-09-28 on eval_search: hit@1 0.327 -> 0.473 (0.8 only
+    # reached 0.373); docs still surface for doc questions (10 of 25 top-5 slots over
+    # 5 spec/plan queries).
+    KIND_DAMP = {"file-content": 0.3}
 
     def _fts_ids(self, match, k):
         return [r[0] for r in self.db.execute(
@@ -232,9 +237,12 @@ class Store:
         for w, ids in zip(self.WEIGHTS, lists):
             for rank, nid in enumerate(ids):
                 score[nid] = score.get(nid, 0.0) + w / (self.RRF_K + rank + 1)
-        top = sorted(score, key=lambda nid: -score[nid])[:int(limit)]
-        if not top:
+        if not score:
             return []
+        ph = ",".join("?" * len(score))
+        for r in self.db.execute(f"SELECT id, kind FROM nodes WHERE id IN ({ph})", list(score)):
+            score[r["id"]] *= self.KIND_DAMP.get(r["kind"], 1.0)
+        top = sorted(score, key=lambda nid: -score[nid])[:int(limit)]
         ph = ",".join("?" * len(top))
         rows = self.db.execute(f"SELECT * FROM nodes WHERE id IN ({ph})", top).fetchall()
         by_id = {r["id"]: self._row(r) for r in rows}

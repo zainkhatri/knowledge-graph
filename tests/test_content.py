@@ -245,3 +245,19 @@ def test_has_text_keeps_ids_and_real_words():
     assert not has_text("Mom\n6/2/21, 4:03 PM")
     assert not has_text("¢ & & & & <> ¢€> €>")
     assert not has_text("")
+
+
+def test_docs_only_skips_images_and_spends_budget_on_documents(tmp_path):
+    # PROJECTS/WORK docs never got indexed: the pool-wide pass spent its whole
+    # nightly budget on image backlog first (2026-09-28: 0 of ~4,400 docs indexed).
+    root = str(tmp_path / "pool")
+    _write(root, "A/img1.png", "img"); _write(root, "A/img2.png", "img")
+    _write(root, "PROJECTS/app/README.md", "deploy steps for the dashboard service")
+    calls = []
+    st = Store(str(tmp_path / "kg.db"))
+    stats = index_content(st, root, box="ARES", budget=1, docs_only=True,
+                          tesseract=lambda p: calls.append(p) or "x")
+    assert calls == []
+    assert stats["processed"] == 1
+    assert st.get_node("ARES:" + os.path.join(root, "PROJECTS/app/README.md"))["status"] == "live"
+    st.close()
