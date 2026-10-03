@@ -50,7 +50,7 @@ def kg(tmp_path):
 def test_run_injects_matching_sessions_and_logs(kg, tmp_path):
     state = tmp_path / "state"
     out = H.run({"session_id": "me", "prompt": "the vault swipe on my phone does not load the next photo"},
-                db=str(kg), state_dir=state, embed=lambda q: None)
+                db=str(kg), state_dir=state, embed=lambda q: None, jev_key="")
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert out["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert "ARES:chat/old1" in ctx and "ARES:chat/me" not in ctx
@@ -58,12 +58,12 @@ def test_run_injects_matching_sessions_and_logs(kg, tmp_path):
     assert log["session"] == "me" and log["hits"] == 1
     # second prompt of the same session: silent
     assert H.run({"session_id": "me", "prompt": "the vault swipe again phone photo"},
-                 db=str(kg), state_dir=state, embed=lambda q: None) is None
+                 db=str(kg), state_dir=state, embed=lambda q: None, jev_key="") is None
 
 
 def test_run_silent_when_nothing_relevant(kg, tmp_path):
     assert H.run({"session_id": "n", "prompt": "write me a poem about the ocean waves"},
-                 db=str(kg), state_dir=tmp_path / "st", embed=lambda q: None) is None
+                 db=str(kg), state_dir=tmp_path / "st", embed=lambda q: None, jev_key="") is None
 
 
 def test_pick_puts_sessions_first_and_caps_folders():
@@ -93,3 +93,34 @@ def test_short_prompt_needs_all_but_one_word():
     install = {"id": "ARES:chat/i", "kind": "chat", "name": "Add kg hook to ZEUS and Macs", "understanding": "install"}
     assert not H.relevant(email, toks, "s")
     assert H.relevant(install, toks, "s")
+
+
+def test_relevant_matches_whole_words_not_substrings():
+    toks = ["add", "hook", "zeus", "macs"]
+    email = {"id": "e", "kind": "chat", "name": "ZEUS cold email", "understanding": "address the hook to the prospect"}
+    assert not H.relevant(email, toks, "s")                  # "add" must not match inside "address"
+    plural = {"id": "p", "kind": "chat", "name": "photos videos", "understanding": "gallery"}
+    assert H.relevant(plural, ["photo", "video", "gallery"], "s")   # 4+ letter prefix still counts
+
+
+def _jev_http(scores):
+    def http(url, body, headers, timeout):
+        req = json.loads(body)
+        assert req["model"] == H.JEV_MODEL and set(req["questions"]) == set(scores)
+        return {"answers": {k: {"noul": v} for k, v in scores.items()}}
+    return http
+
+
+def test_jev_filter_drops_low_scores_and_keeps_order():
+    hits = [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}, {"id": "c", "name": "C"}]
+    kept = H.jev_filter("prompt", hits, key="sk-or-x", http=_jev_http({"c0": 0.9, "c1": 0.1, "c2": 0.4}))
+    assert [h["id"] for h in kept] == ["a", "c"]
+
+
+def test_jev_filter_falls_back_on_error_or_no_key():
+    hits = [{"id": "a", "name": "A"}]
+    def boom(*a, **k):
+        raise TimeoutError
+    assert H.jev_filter("p", hits, key="sk-or-x", http=boom) is None
+    assert H.jev_filter("p", hits, key=None, http=boom) is None
+    assert H.jev_filter("p", [], key="sk-or-x", http=boom) == []
