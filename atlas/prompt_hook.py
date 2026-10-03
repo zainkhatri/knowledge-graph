@@ -21,6 +21,7 @@ OTHER_MAX = 2            # folders/files: at most this many — past sessions ar
 CHAT_KINDS = ("chat", "gpt-chat", "claude-chat")
 SKIP_KINDS = frozenset({"file-content"})   # extracted docs match long prompts by sheer length
 OVERLAP_FRAC = 0.3
+SHORT_PROMPT = 6          # up to this many content words: all but one must match
 SEARCH_POOL = 12
 CLIP = 260
 EMBED_TIMEOUT_S = 2.5
@@ -67,6 +68,8 @@ def relevant(hit: dict, tokens: list[str], session_id: str) -> bool:
         return False
     text = f"{hit.get('name') or ''} {hit.get('understanding') or ''}".lower()
     need = min(len(tokens), max(MIN_TOKENS, math.ceil(len(tokens) * OVERLAP_FRAC)))
+    if len(tokens) <= SHORT_PROMPT:
+        need = max(need, len(tokens) - 1)   # "add the hook to zeus" must not match cold-email "hooks" on ZEUS
     return sum(1 for t in tokens if t in text) >= need
 
 

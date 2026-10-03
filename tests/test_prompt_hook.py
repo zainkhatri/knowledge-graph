@@ -84,3 +84,12 @@ def test_relevant_scales_with_long_prompts_and_skips_docs():
 def test_pick_dedupes_one_session_on_two_boxes():
     hits = [{"id": "ARES:chat/x", "kind": "chat"}, {"id": "ZEUS:chat/x", "kind": "chat"}, {"id": "ARES:chat/y", "kind": "chat"}]
     assert [h["id"] for h in H.pick(hits)] == ["ARES:chat/x", "ARES:chat/y"]
+
+
+def test_short_prompt_needs_all_but_one_word():
+    toks = H.content_tokens("add the hook to zeus and the macs too")
+    assert toks == ["add", "hook", "zeus", "macs"]
+    email = {"id": "ZEUS:chat/e", "kind": "chat", "name": "ZEUS: cold email", "understanding": "email hook for a prospect"}
+    install = {"id": "ARES:chat/i", "kind": "chat", "name": "Add kg hook to ZEUS and Macs", "understanding": "install"}
+    assert not H.relevant(email, toks, "s")
+    assert H.relevant(install, toks, "s")

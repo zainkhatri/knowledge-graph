@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Retry installing the ATLAS first-prompt hook on boxes that were offline at install time
+# (ZEUS, the MacBook Air). Run by kg-prompt-hook-install.timer; marks each box done and
+# turns the timer off once every box has it.
+set -u
+DIR=/var/lib/kg-prompt-hook-install
+mkdir -p "$DIR"
+INSTALL="$(dirname "$(readlink -f "$0")")/install-prompt-hook"
+# One box can have several routes (ZEUS: LAN alias or tailnet alias); first that works counts.
+BOXES=("zeus:zeus-lan hermes" "air:zainkhatri@100.95.208.65")
+left=0
+for entry in "${BOXES[@]}"; do
+  name="${entry%%:*}"; routes="${entry#*:}"
+  [ -e "$DIR/done-$name" ] && continue
+  ok=""
+  for r in $routes; do
+    if out=$(timeout 90 "$INSTALL" "$r" 2>&1) && grep -q "hook check: ok" <<<"$out"; then
+      echo "$(date -Is) $name via $r: $out" >> "$DIR/log"; touch "$DIR/done-$name"; ok=1; break
+    fi
+  done
+  [ -n "$ok" ] || left=$((left + 1))
+done
+if [ "$left" -eq 0 ]; then systemctl disable --now kg-prompt-hook-install.timer 2>/dev/null; fi
+exit 0

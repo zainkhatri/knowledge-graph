@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Install the ATLAS first-prompt hook (bin/kg-prompt-hook) on another box's Claude Code.
+# The box has no ATLAS DB of its own, so its hook pipes the prompt to ARES over ssh — the same
+# path its homelab-kg MCP already uses. Idempotent: re-running changes nothing.
+#   usage: install-prompt-hook <ssh-host>      e.g. install-prompt-hook mac
+set -euo pipefail
+HOST="${1:?usage: install-prompt-hook <ssh-host>}"
+ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" 'python3 -' <<'PY'
+import json, os, shutil, subprocess, time
+from pathlib import Path
+
+REMOTE = '"/mnt/nvme/PROMETHEUS/PROJECTS/more projects/atlas/bin/kg-prompt-hook"'
+home = Path.home()
+helpers = home / ".claude" / "helpers"
+helpers.mkdir(parents=True, exist_ok=True)
+probe = json.dumps({"session_id": f"install-probe-{int(time.time())}",
+                    "prompt": "ssh ares auto route to zeus failover backup"})
+
+# First ssh target to ARES that answers the probe with ATLAS context wins.
+target = None
+for cand in ("ares", "root@100.77.42.110"):
+    try:
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", cand, REMOTE],
+                           input=probe, capture_output=True, text=True, timeout=15)
+    except Exception:
+        continue
+    if '"UserPromptSubmit"' in r.stdout:
+        target = cand
+        break
+if not target:
+    raise SystemExit("no working ssh route to ARES from this box")
+
+wrapper = helpers / "kg-prompt-hook.sh"
+wrapper.write_text(f"""#!/bin/sh
+# ATLAS first-prompt hook: runs on ARES (atlas bin/kg-prompt-hook). Never blocks a prompt.
+case "$CLAUDE_CODE_ENTRYPOINT" in sdk*) exit 0;; esac
+exec ssh -o BatchMode=yes -o ConnectTimeout=3 {target} '{REMOTE}' 2>/dev/null || exit 0
+""")
+wrapper.chmod(0o755)
+
+sp = home / ".claude" / "settings.json"
+settings = json.loads(sp.read_text()) if sp.exists() else {}
+ups = settings.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+if not ups:
+    ups.append({"hooks": []})
+hooks = ups[0].setdefault("hooks", [])
+if any("kg-prompt-hook" in h.get("command", "") for h in hooks):
+    print(f"already installed (route {target})")
+else:
+    if sp.exists():
+        shutil.copy2(sp, sp.with_name(f"settings.json.bak-kg-{int(time.time())}"))
+    hooks.append({"type": "command", "command": str(wrapper), "timeout": 8})
+    sp.write_text(json.dumps(settings, indent=2) + "\n")
+    print(f"installed (route {target})")
+r = subprocess.run([str(wrapper)], input=probe.replace("install-probe", "install-check"),
+                   capture_output=True, text=True, timeout=20)
+print("hook check:", "ok" if '"UserPromptSubmit"' in r.stdout else "FAILED")
+PY
