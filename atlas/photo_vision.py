@@ -192,8 +192,9 @@ class FaceIndex:
             out = {}
             for path, item in con.execute("SELECT path, item FROM photos"):
                 key = (json.loads(item).get("thumb") or "").rsplit("/", 1)[-1].replace(".jpg", "")
-                if key in self.tags:
-                    out[self._norm(path)] = key
+                real = self._resolve(path) if key in self.tags else None
+                if real:
+                    out[real] = key
             return out
         finally:
             con.close()
@@ -203,6 +204,20 @@ class FaceIndex:
             if p.startswith(a + "/"):
                 return self.root + p[len(a):]
         return p
+
+    def _resolve(self, p):
+        """The file an index path refers to today. Most rows still use an old layout
+        with a doubled PHOTOS segment (PHOTOS/PHOTOS/FUJI/x -> PHOTOS/FUJI/x), so the
+        exact path is tried first, then the collapsed one; neither existing means skip."""
+        exact = self._norm(p)
+        if os.path.isfile(exact):
+            return exact
+        nested = self.root + "/PHOTOS/"
+        if exact.startswith(nested):
+            moved = self.root + "/" + exact[len(nested):]
+            if os.path.isfile(moved):
+                return moved
+        return None
 
     def _confident(self, face, tagged):
         if float(face.get("det_score") or 0) < self.MIN_DET:

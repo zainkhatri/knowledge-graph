@@ -257,6 +257,9 @@ def _faces(tmp_path, root, photos, profiles=None):
     rows, face_index = [], {}
     for i, (rel, faces) in enumerate(photos.items()):
         key = f"{i:032x}"
+        disk = rel[len("PHOTOS/"):] if rel.startswith("PHOTOS/") else rel   # old doubled layout
+        if not os.path.exists(os.path.join(root, disk)):
+            _write(root, disk)
         rows.append(("/mnt/data/PHOTOS/" + rel, json.dumps({"thumb": f"/static/thumbs/{key}.jpg"})))
         face_index[key] = []
         for tags, vec, det in faces:
@@ -348,3 +351,13 @@ def test_close_profiles_with_different_names_stay_separate(tmp_path):
     fx = _faces(tmp_path, root, {"2024/a.jpg": [(["zayd"], _near(1, 5, 0.03), 0.9)]}, profiles=prof)
     assert len(fx.groups) == 3
     assert fx.names(os.path.join(root, "2024/a.jpg")) == []          # too close to call
+
+
+def test_face_index_resolves_stale_nested_photos_paths(tmp_path):
+    # The dashboard's photo index still lists most photos under an old layout,
+    # /mnt/data/PHOTOS/PHOTOS/<dir>/<file>, while the file now lives at PHOTOS/<dir>/<file>.
+    root = str(tmp_path / "PHOTOS")
+    real = _write(root, "FUJI/DSCF1.JPG")
+    fx = _faces(tmp_path, root, {"PHOTOS/FUJI/DSCF1.JPG": [(["zain"], _near(0), 0.9)]})
+    assert fx.names(real) == ["Zain"]
+    assert fx.names(os.path.join(root, "PHOTOS/FUJI/DSCF1.JPG")) == []    # no such file: no key
