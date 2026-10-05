@@ -1,0 +1,57 @@
+# Photo descriptions (local vision), My Eyes Only excluded
+
+Date: 2026-10-04. Status: shipped. Council-reviewed (5 advisors) the same day.
+
+## Goal
+Every photo under `PHOTOS/` gets a one-or-two sentence description from a local
+vision model, merged with any OCR text, so agents can find photos by what is in
+them ("bedside lamp", "colonnade laptop"). Owner requirement, verbatim: every
+photo EXCEPT anything in My Eyes Only — "extremely important".
+
+## Why it was needed
+The 2026-09-25 content pass had a vision fallback (`llava:7b`) that never ran: no
+vision model was ever installed, so 32.5k of 43.8k photo nodes were status
+`empty` and none had a description.
+
+## Shipped
+- `atlas/photo_vision.py`: `VaultGuard`, `describe_pending`, `prune_photos`,
+  `visible`, `prepare_image`, `clean`. 13 tests in `tests/test_photo_vision.py`
+  plus one in `tests/test_mcp_server.py`.
+- CLI: `kg describe-photos <root> --budget N --minutes M` (always prunes first),
+  `kg prune-photos <root>`, `kg index-content ... --vault-guard`.
+- Model: `gemma3:4b` on EROS (GTX 1070) via ARES's `:11434` socat proxy, ~15-20s
+  per photo at 768px. Benchmarked against `qwen2.5vl:3b` (~22s, a bit more detail)
+  and `moondream` (unusable output).
+- `kg-photo-vision.timer`: 22:00 (until 01:55) and 02:30 (until 05:05), keeping
+  EROS free for `kg-deep-backfill` (02:00) and `kg-nightly` (05:15). Roughly 1,200
+  photos per night, about five weeks for the backlog. Newest photos first.
+- The content pass no longer calls a vision model at all; photos get
+  descriptions only through the guarded path above.
+
+## The vault boundary (fails closed, layered)
+1. Path rules on the path and its realpath: any dot-directory component (the
+   real vault is `PHOTOS/.vault/`), `walker.default_vault_pred()`, no symlinks.
+2. The dashboard's vault index (`ai_data/vault.json`): every vaulted item's
+   original library path, and its file name anywhere in the library (catches a
+   stray copy; costs ~375 photos that share a name with a vaulted item).
+3. Known content hashes of vaulted items (`content_hashes.json`; only 4 of 559
+   are known), checked against the bytes actually read.
+4. Re-checked after the model returns; a photo vaulted mid-run is dropped and its
+   node deleted. Nodes the guard rejects are deleted, not skipped.
+5. Unreadable/empty vault index: `VaultIndexError`, the run aborts.
+6. Query time (`mcp_server.py`): photo-derived nodes are shown only while the
+   guard allows their file, reloaded every 60s; no guard means no photo nodes.
+   Covers search, get, neighbors (both edge ends) and tree.
+7. Nightly tripwire: any node under a PHOTOS dot-directory exits the job non-zero.
+
+Vault files are never opened. The vault index is read only to build the sets.
+
+## Known limits
+- A copy of a vaulted photo saved under a different file name, with no known
+  content hash, would be described. Closing this fully means hashing the vault
+  originals (reading their bytes), which needs the owner's explicit OK.
+- Descriptions are AI-generated and can be wrong; nodes carry `vision_model`,
+  `vision_v`, `described_at`, and agents see an "untrusted data" note.
+- First live prune (2026-10-04) removed 1,704 stale photo nodes (1,329 for files
+  no longer at their path). The pre-change backup
+  `data/homelab_kg.pre-photo-vision-2026-10-04.db` still holds those rows.

@@ -48,6 +48,11 @@ def main(argv=None):
     ict = sub.add_parser("index-content"); ict.add_argument("root"); ict.add_argument("--box", default="ARES")
     ict.add_argument("--budget", type=int, default=500)
     ict.add_argument("--docs-only", action="store_true")
+    ict.add_argument("--vault-guard", action="store_true",
+                     help="also skip anything the photo VaultGuard rejects (abort if the vault index is unreadable)")
+    dp = sub.add_parser("describe-photos"); dp.add_argument("root"); dp.add_argument("--budget", type=int, default=500)
+    dp.add_argument("--minutes", type=float, default=None)
+    pp = sub.add_parser("prune-photos"); pp.add_argument("root")
     sub.add_parser("link-workdirs")
     sub.add_parser("fix-names")
     gt = sub.add_parser("gen-titles"); gt.add_argument("--budget", type=int, default=5000)
@@ -101,7 +106,17 @@ def main(argv=None):
             print(index_env(st, a.box, [a.home, "/mnt/nvme/PROMETHEUS/.claude"], a.config))
         elif a.cmd == "index-content":
             from .content import index_content
-            print(index_content(st, a.root, a.box, budget=a.budget, docs_only=a.docs_only))
+            guard = None
+            if a.vault_guard:
+                from .photo_vision import VaultGuard
+                guard = VaultGuard()                   # raises (non-zero exit) if untrusted
+            print(index_content(st, a.root, a.box, budget=a.budget, docs_only=a.docs_only, guard=guard))
+        elif a.cmd in ("describe-photos", "prune-photos"):
+            from .photo_vision import VaultGuard, describe_pending, prune_photos
+            guard = VaultGuard()                       # raises (non-zero exit) if untrusted
+            print(prune_photos(st, a.root, guard))     # always prune first
+            if a.cmd == "describe-photos":
+                print(describe_pending(st, a.root, guard, budget=a.budget, minutes=a.minutes))
         elif a.cmd == "embed-pending":
             from .embed_pending import embed_pending
             print(embed_pending(st, a.budget, workers=a.workers))

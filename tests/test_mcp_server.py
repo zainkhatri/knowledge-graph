@@ -46,3 +46,21 @@ def test_get_drops_embedding_and_bookkeeping(tmp_path, monkeypatch):
 def test_get_missing_is_none(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     assert M.kg_get("nope") is None
+
+
+def test_photo_nodes_hidden_when_vault_guard_rejects(tmp_path, monkeypatch):
+    import mcp_server as M
+    from atlas import photo_vision as PV
+    st = Store(str(tmp_path / "kg.db"))
+    gone = PV.PHOTOS_ROOT + "/9999/definitely-missing.jpg"
+    st.upsert_node({"id": "ARES:" + gone, "box": "ARES", "kind": "file-content", "path": gone,
+                    "name": "definitely-missing.jpg", "understanding": "zebra crossing",
+                    "meta": {"vision_model": "gemma3:4b"}})
+    st.upsert_node({"id": "ARES:/x", "box": "ARES", "kind": "folder", "path": "/x",
+                    "name": "x", "understanding": "zebra folder"})
+    st.add_edge("ARES:/x", "ARES:" + gone, "contains")
+    monkeypatch.setattr(M, "_store", st)
+    monkeypatch.setattr(M, "_guard", {"g": None, "at": 1e18})     # vault index unreadable
+    assert [h["id"] for h in M.kg_search("zebra")] == ["ARES:/x"]
+    assert M.kg_get("ARES:" + gone) is None
+    assert M.kg_neighbors("ARES:/x") == []

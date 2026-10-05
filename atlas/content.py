@@ -117,7 +117,7 @@ def _read_text_capped(path):
 
 def index_content(store, root, box="ARES", vault_pred=None, budget=500,
                    tesseract=None, vision=None, pdftotext=None, docx_extract=None,
-                   docs_only=False):
+                   docs_only=False, guard=None):
     """Walk `root` and extract text from photos (OCR)/PDF/docx/txt/md into new
     `file-content` nodes, searchable via the existing FTS index (`understanding`
     is the extracted text). Folders are untouched — `walker.py` owns those.
@@ -134,7 +134,9 @@ def index_content(store, root, box="ARES", vault_pred=None, budget=500,
     exts = SUPPORTED_EXT - IMAGE_EXT if docs_only else SUPPORTED_EXT
     vault_pred = vault_pred if vault_pred is not None else default_vault_pred()
     tesseract = tesseract or _run_tesseract
-    vision = vision or _run_vision
+    # Photos are described by atlas.photo_vision (vault-guarded, nightly); the
+    # content pass itself never sends images to a vision model by default.
+    vision = vision or (lambda _p: None)
     pdftotext = pdftotext or _run_pdftotext
     docx_extract = docx_extract or _run_docx
 
@@ -165,7 +167,7 @@ def index_content(store, root, box="ARES", vault_pred=None, budget=500,
 
         for fname in sorted(filenames):
             path = os.path.join(dirpath, fname)
-            if vault_pred(path):
+            if vault_pred(path) or (guard is not None and not guard.allowed(path)):
                 stats["skipped_vault"] += 1
                 continue
             ext = os.path.splitext(fname)[1].lower()
