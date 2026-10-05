@@ -22,7 +22,7 @@ from .walker import default_vault_pred
 from . import understanding as U
 
 VISION_MODEL = os.getenv("KG_VISION_MODEL", "gemma3:4b")
-VISION_VERSION = 2          # bump to re-describe everything (2: named faces as context)
+VISION_VERSION = 4          # bump to re-describe everything (4: calibrated face profiles)
 MAX_SIDE = 768
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"}
 DASH = "/mnt/nvme/PROMETHEUS/PROJECTS/ARES-DASHBOARD"
@@ -30,6 +30,8 @@ VAULT_INDEX = os.getenv("KG_VAULT_INDEX", f"{DASH}/ai_data/vault.json")
 CONTENT_HASHES = os.getenv("KG_CONTENT_HASHES", f"{DASH}/content_hashes.json")
 FACE_CLUSTERS = os.getenv("KG_FACE_CLUSTERS", f"{DASH}/ai_data/face_clusters.json")
 PHOTO_INDEX = os.getenv("KG_PHOTO_INDEX", f"{DASH}/photo_index.db")
+FACE_INDEX = os.getenv("KG_FACE_INDEX", f"{DASH}/ai_data/face_index.json")
+FACE_EMB = os.getenv("KG_FACE_EMB", f"{DASH}/ai_data/face_embeddings.npy")
 PHOTOS_ROOT = "/mnt/nvme/PROMETHEUS/PHOTOS"
 ALIASES = ("/mnt/data/PHOTOS", PHOTOS_ROOT)   # LXC bind path and host path
 PROMPT = ("Describe this photo for a personal photo search index in one or two factual "
@@ -102,35 +104,87 @@ class VaultGuard:
 
 
 class FaceIndex:
-    """People named in the dashboard's face clusters, per photo path. The clusters list
-    photos by thumb key; the dashboard's photo index maps path -> thumb key. Optional
-    context: missing or unreadable files just mean no names (loaded=False)."""
+    """High-confidence people per photo, from the dashboard's face data. A name is used
+    only when ALL hold for some face in the photo: detector score >= MIN_DET, distance to
+    that person's profile <= MAX_DIST, a lead >= MIN_MARGIN over the next person, and the
+    cluster also tags the photo. Missing/unreadable data means no names, never looser.
 
-    def __init__(self, clusters=FACE_CLUSTERS, photo_index=PHOTO_INDEX, photos_root=PHOTOS_ROOT):
-        self.root, self.by_path, self.loaded = photos_root, {}, False
+    Calibrated 2026-10-04 (no human labels exist: 0 seed/excluded photos):
+    - Profiles are a trimmed centroid of each cluster's own faces (`emb_indices`, keep
+      the closest 70%, 3 passes). The stored 5 `exemplars` are not usable: for Zain,
+      Hamza and Bronny their centroid sits ~1.0 from the cluster's real faces, and two
+      profiles share an identical exemplar (bronny/zaeem, mohsin/bholat).
+    - With these profiles, genuine anchor faces sit at median 0.52 and the 0.01%
+      impostor quantile is 1.067; MAX_DIST 1.00 sits below it. ~11.5k photos get names.
+    - Clusters within ALIAS_DIST whose names share a word (omar / omar saleem) are one
+      person: one name (the bigger cluster's), no margin contest. Close pairs WITHOUT a
+      shared word (bronny / zayd) stay separate, so faces between them get no name.
+    The dashboard's own expand step (nearest exemplar, 1.05 / 0.02 lead) is much looser,
+    so its tags alone are never used."""
+    MIN_DET = float(os.getenv("KG_FACE_MIN_DET", "0.7"))
+    MAX_DIST = float(os.getenv("KG_FACE_MAX_DIST", "1.00"))
+    MIN_MARGIN = float(os.getenv("KG_FACE_MIN_MARGIN", "0.10"))
+    ALIAS_DIST = 0.6
+    MIN_FACES = 5
+
+    def __init__(self, clusters=FACE_CLUSTERS, photo_index=PHOTO_INDEX, faces=FACE_INDEX,
+                 embeddings=FACE_EMB, photos_root=PHOTOS_ROOT):
+        self.root, self.key_by_path, self.loaded, self.groups = photos_root, {}, False, []
         try:
-            by_key = self._names_by_key(clusters)
-            self.by_path = self._paths(photo_index, by_key)
-            self.loaded = True
-        except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
-            self.by_path = {}
+            import numpy as np
+            self.np = np
+            self.embs = np.load(embeddings, mmap_mode="r")
+            self._load_clusters(clusters)
+            with open(faces) as f:
+                self.faces = json.load(f)
+            self.key_by_path = self._paths(photo_index)
+            self.loaded = len(self.groups) >= 2
+        except (OSError, ValueError, KeyError, TypeError, IndexError, ImportError, sqlite3.Error):
+            self.key_by_path = {}
 
-    @staticmethod
-    def _names_by_key(path):
+    def _profile(self, idx):
+        np = self.np
+        E = np.asarray(self.embs[sorted(idx)], dtype="float32")
+        c = E.mean(axis=0)
+        for _ in range(3):
+            c = c / np.linalg.norm(c)
+            d = np.linalg.norm(E - c, axis=1)
+            c = E[d <= np.quantile(d, 0.7)].mean(axis=0)
+        return c / np.linalg.norm(c)
+
+    def _load_clusters(self, path):
         with open(path) as f:
             clusters = json.load(f)
-        by_key = {}
+        self.tags, profs = {}, []
         for c in clusters.values():
             name = (c.get("name") or "").strip() if isinstance(c, dict) else ""
             if not name or name.isdigit():
                 continue
+            name = name.title()
             gone = set(c.get("excluded_hashes") or [])
             for k in c.get("photo_hashes") or []:
                 if k not in gone:
-                    by_key.setdefault(k, set()).add(name.title())
-        return by_key
+                    self.tags.setdefault(k, set()).add(name)
+            idx = {int(i) for i in c.get("emb_indices") or [] if 0 <= int(i) < len(self.embs)}
+            if len(idx) >= self.MIN_FACES:
+                profs.append((name, self._profile(idx), int(c.get("photo_count") or 0)))
+        self.groups = self._alias_groups(profs)
 
-    def _paths(self, db_path, by_key):
+    def _alias_groups(self, profs):
+        """[(display_name, member_names, centroid)]; merges near profiles sharing a word."""
+        np, groups = self.np, []
+        for name, cen, _ in sorted(profs, key=lambda p: -p[2]):     # biggest first names the group
+            words = set(name.lower().split())
+            for g in groups:
+                same_word = any(words & set(m.lower().split()) for m in g[1])
+                if same_word and float(np.linalg.norm(g[2] - cen)) < self.ALIAS_DIST:
+                    g[1].add(name)
+                    break
+            else:
+                groups.append((name, {name}, cen))
+        return groups
+
+    def _paths(self, db_path):
         if not os.path.isfile(db_path):
             raise OSError("photo index missing")
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -138,8 +192,8 @@ class FaceIndex:
             out = {}
             for path, item in con.execute("SELECT path, item FROM photos"):
                 key = (json.loads(item).get("thumb") or "").rsplit("/", 1)[-1].replace(".jpg", "")
-                if key in by_key:
-                    out[self._norm(path)] = sorted(by_key[key])
+                if key in self.tags:
+                    out[self._norm(path)] = key
             return out
         finally:
             con.close()
@@ -150,8 +204,24 @@ class FaceIndex:
                 return self.root + p[len(a):]
         return p
 
+    def _confident(self, face, tagged):
+        if float(face.get("det_score") or 0) < self.MIN_DET:
+            return None
+        e = self.embs[int(face["emb_idx"])]
+        d = sorted((float(self.np.linalg.norm(cen - e)), i) for i, (_, _, cen) in enumerate(self.groups))
+        (best, i), (second, _) = d[0], d[1]
+        name, members, _ = self.groups[i]
+        if best <= self.MAX_DIST and second - best >= self.MIN_MARGIN and members & tagged:
+            return name
+        return None
+
     def names(self, path):
-        return list(self.by_path.get(path, []))
+        key = self.key_by_path.get(path)
+        if not key:
+            return []
+        tagged = self.tags.get(key, set())
+        found = {self._confident(f, tagged) for f in self.faces.get(key) or []}
+        return sorted(n for n in found if n)
 
 
 def load_guard():

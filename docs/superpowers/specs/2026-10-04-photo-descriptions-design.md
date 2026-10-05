@@ -65,3 +65,20 @@ identified these people...; do not add any other names") and into the node as a
 Excluded faces (`excluded_hashes`) are honored. Names are looked up only for
 photos the VaultGuard already allowed. Missing face files just mean no names.
 `VISION_VERSION` 2 re-describes the v1 pilot photos.
+
+## High-confidence faces only (v4, same day)
+The v2 names came straight from the dashboard's cluster tags. Calibration showed those
+are loose: no human labels exist (0 seed / 0 excluded photos), the dashboard's expand
+step accepts nearest-exemplar distance < 1.05 with a 0.02 lead, and of 28,182 name tags
+only 22% survive a strict check (26% have no detected face, 18% ambiguous, 17% closest
+to someone else, 12% too far, 5% weak detection).
+Root cause found: the stored cluster `exemplars` are not representative (their centroid
+sits ~1.0 from the cluster's own faces for Zain/Hamza/Bronny; bronny/zaeem and
+mohsin/bholat share an identical exemplar). `FaceIndex` now builds each profile from
+the cluster's own faces (`emb_indices`, trimmed centroid) and names a face only if:
+det >= 0.7, distance <= 1.00 (0.01% impostor quantile is 1.067; genuine median 0.52),
+lead >= 0.10 over the next person, and the cluster tags the photo. Omar / Omar Saleem
+merge (close + shared word); Bronny / Zayd are close without a shared word and stay
+separate (faces between them get no name). Result: 10,733 photos with confident names.
+Dashboard data issues found (not changed here, the dashboard owns its face DB): stale
+exemplars, two shared exemplars, possible duplicates bronny~zayd and tejas~jason.

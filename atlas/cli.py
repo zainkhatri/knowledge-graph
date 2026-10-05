@@ -118,7 +118,7 @@ def main(argv=None):
             if a.cmd == "describe-photos":
                 from .photo_vision import FaceIndex
                 faces = FaceIndex()
-                print({"faces_loaded": faces.loaded, "photos_with_people": len(faces.by_path)})
+                print({"faces_loaded": faces.loaded, "tagged_photos": len(faces.key_by_path)})
                 print(describe_pending(st, a.root, guard, budget=a.budget, minutes=a.minutes, faces=faces))
         elif a.cmd == "embed-pending":
             from .embed_pending import embed_pending

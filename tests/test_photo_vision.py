@@ -234,37 +234,77 @@ def test_clean_drops_chatty_preamble():
 
 # --- faces -----------------------------------------------------------------
 
-def _faces(tmp_path, root, tagged):
-    """tagged: {relpath: [names]} -> a FaceIndex built from dashboard-shaped files."""
+def _unit(i, dim=8):
+    import numpy as np
+    v = np.zeros(dim, dtype="float32"); v[i] = 1.0
+    return v
+
+
+def _faces(tmp_path, root, photos, profiles=None):
+    """photos: {relpath: [(tagged_names, face_vec, det_score), ...]} -> FaceIndex.
+    profiles: {name: [member face vecs]} (default Zain = axis 0, Hamza = 1, Haadi = 2,
+    five members each). A cluster's profile is built from its member faces."""
     import sqlite3
-    clusters, rows = {}, []
-    for i, (rel, names) in enumerate(tagged.items()):
+    import numpy as np
+    profiles = profiles or {n: [_unit(i)] * 5 for i, n in enumerate(("zain", "hamza", "haadi"))}
+    embs, clusters = [], {}
+    for n, members in profiles.items():
+        idx = list(range(len(embs), len(embs) + len(members)))
+        embs.extend(np.asarray(m, dtype="float32") for m in members)
+        clusters[n] = {"name": n, "photo_hashes": [], "excluded_hashes": [], "emb_indices": idx,
+                       "photo_count": len(members)}
+    clusters["unnamed"] = {"name": "", "photo_hashes": [], "emb_indices": []}
+    rows, face_index = [], {}
+    for i, (rel, faces) in enumerate(photos.items()):
         key = f"{i:032x}"
         rows.append(("/mnt/data/PHOTOS/" + rel, json.dumps({"thumb": f"/static/thumbs/{key}.jpg"})))
-        for n in names:
-            c = clusters.setdefault(n, {"name": n, "photo_hashes": [], "excluded_hashes": []})
-            c["photo_hashes"].append(key)
-    clusters["x"] = {"name": "", "photo_hashes": [f"{0:032x}"]}          # unnamed: ignored
-    fc = tmp_path / "face_clusters.json"
-    fc.write_text(json.dumps({str(i): c for i, c in enumerate(clusters.values())}))
+        face_index[key] = []
+        for tags, vec, det in faces:
+            for n in tags:
+                clusters[n]["photo_hashes"].append(key)
+            face_index[key].append({"emb_idx": len(embs), "det_score": det, "bbox": [0, 0, 1, 1]})
+            embs.append(np.asarray(vec, dtype="float32"))
+    (tmp_path / "face_clusters.json").write_text(json.dumps({str(i): c for i, c in enumerate(clusters.values())}))
+    (tmp_path / "face_index.json").write_text(json.dumps(face_index))
+    np.save(tmp_path / "face_embeddings.npy", np.stack(embs))
     db = tmp_path / "photo_index.db"
     con = sqlite3.connect(db)
     con.execute("CREATE TABLE photos (path TEXT PRIMARY KEY, item TEXT NOT NULL)")
     con.executemany("INSERT INTO photos VALUES (?,?)", rows)
     con.commit(); con.close()
-    return PV.FaceIndex(str(fc), str(db), photos_root=root)
+    return PV.FaceIndex(str(tmp_path / "face_clusters.json"), str(db), str(tmp_path / "face_index.json"),
+                        str(tmp_path / "face_embeddings.npy"), photos_root=root)
 
 
-def test_face_index_maps_photo_paths_to_named_people(tmp_path):
+def _near(i, j=None, w=0.15):
+    """A face embedding close to profile i (optionally pulled toward profile j)."""
+    import numpy as np
+    v = _unit(i) + (w * _unit(j) if j is not None else w * _unit(5))
+    return v / np.linalg.norm(v)
+
+
+def test_face_index_names_only_high_confidence_faces(tmp_path):
+    import numpy as np
     root = str(tmp_path / "PHOTOS")
-    fx = _faces(tmp_path, root, {"2024/a.jpg": ["zain", "hamza"], "2024/b.jpg": []})
-    assert fx.names(os.path.join(root, "2024/a.jpg")) == ["Hamza", "Zain"]
-    assert fx.names(os.path.join(root, "2024/b.jpg")) == []
-    assert fx.names(os.path.join(root, "nope.jpg")) == []
+    midway = (_unit(0) + _unit(1)) / np.linalg.norm(_unit(0) + _unit(1))
+    fx = _faces(tmp_path, root, {
+        "2024/clear.jpg": [(["zain"], _near(0), 0.9), (["hamza"], _near(1), 0.85)],
+        "2024/blurry.jpg": [(["zain"], _near(0), 0.4)],                 # weak detection
+        "2024/ambiguous.jpg": [(["zain"], midway, 0.9)],                # equally Zain/Hamza
+        "2024/mislabeled.jpg": [(["haadi"], _near(0), 0.9)],            # face is Zain, tag says Haadi
+        "2024/untagged.jpg": [([], _near(0), 0.9)],                     # profile match, no cluster tag
+        "2024/far.jpg": [(["zain"], _unit(4), 0.9)],                    # nobody's face
+    })
+    assert fx.loaded
+    p = lambda r: os.path.join(root, r)
+    assert fx.names(p("2024/clear.jpg")) == ["Hamza", "Zain"]
+    for r in ("blurry", "ambiguous", "mislabeled", "untagged", "far"):
+        assert fx.names(p(f"2024/{r}.jpg")) == [], r
+    assert fx.names(p("2024/none.jpg")) == []
 
 
 def test_face_index_missing_files_means_no_names(tmp_path):
-    fx = PV.FaceIndex(str(tmp_path / "none.json"), str(tmp_path / "none.db"))
+    fx = PV.FaceIndex(*(str(tmp_path / n) for n in ("a.json", "b.db", "c.json", "d.npy")))
     assert fx.names("/x.jpg") == [] and fx.loaded is False
 
 
@@ -274,7 +314,7 @@ def test_people_go_into_prompt_text_and_meta(tmp_path):
     st = Store(str(tmp_path / "kg.db"))
     _node(st, a)
     g = _guard(tmp_path, root, vaulted=["x/zzz.jpg"])
-    fx = _faces(tmp_path, root, {"2024/a.jpg": ["zain", "hamza"]})
+    fx = _faces(tmp_path, root, {"2024/a.jpg": [(["zain"], _near(0), 0.9), (["hamza"], _near(1), 0.9)]})
     http = SpyHTTP(reply="Two friends at a cafe.")
     PV.describe_pending(st, root, g, faces=fx, http=http, prepare=_ident, gpu_free=lambda: True)
     assert "Hamza, Zain" in http.calls[0]["prompt"]
@@ -283,3 +323,28 @@ def test_people_go_into_prompt_text_and_meta(tmp_path):
     assert "People: Hamza, Zain" in n["understanding"]
     assert [r["id"] for r in st.search("hamza cafe")] == ["ARES:" + a]
     st.close()
+
+
+def test_contaminated_member_does_not_steal_a_name(tmp_path):
+    # One of Hamza's cluster faces is really Zain's (the real data has shared/contaminated
+    # members). The trimmed profile ignores it, so Zain's face still gets Zain's name.
+    root = str(tmp_path / "PHOTOS")
+    prof = {"zain": [_unit(0)] * 5, "hamza": [_unit(1)] * 4 + [_near(0)], "haadi": [_unit(2)] * 5}
+    fx = _faces(tmp_path, root, {"2024/a.jpg": [(["zain", "hamza"], _near(0), 0.9)]}, profiles=prof)
+    assert fx.names(os.path.join(root, "2024/a.jpg")) == ["Zain"]
+
+
+def test_split_clusters_of_one_person_share_a_name(tmp_path):
+    root = str(tmp_path / "PHOTOS")
+    prof = {"zain": [_unit(0)] * 5, "hamza": [_unit(1)] * 5,
+            "haadi": [_unit(2)] * 9, "haadi k": [_near(2, 5, 0.05)] * 5}
+    fx = _faces(tmp_path, root, {"2024/a.jpg": [(["haadi k"], _near(2), 0.9)]}, profiles=prof)
+    assert fx.names(os.path.join(root, "2024/a.jpg")) == ["Haadi"]
+
+
+def test_close_profiles_with_different_names_stay_separate(tmp_path):
+    root = str(tmp_path / "PHOTOS")
+    prof = {"zain": [_unit(0)] * 5, "bronny": [_unit(1)] * 5, "zayd": [_near(1, 5, 0.05)] * 5}
+    fx = _faces(tmp_path, root, {"2024/a.jpg": [(["zayd"], _near(1, 5, 0.03), 0.9)]}, profiles=prof)
+    assert len(fx.groups) == 3
+    assert fx.names(os.path.join(root, "2024/a.jpg")) == []          # too close to call
