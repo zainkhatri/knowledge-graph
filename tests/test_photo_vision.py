@@ -230,3 +230,56 @@ def test_clean_drops_chatty_preamble():
     assert PV.clean(raw) == "A dog on a beach."
     assert PV.clean("Here is a description: A cat.") == "A cat."
     assert PV.clean("A man at a cafe: reading.") == "A man at a cafe: reading."
+
+
+# --- faces -----------------------------------------------------------------
+
+def _faces(tmp_path, root, tagged):
+    """tagged: {relpath: [names]} -> a FaceIndex built from dashboard-shaped files."""
+    import sqlite3
+    clusters, rows = {}, []
+    for i, (rel, names) in enumerate(tagged.items()):
+        key = f"{i:032x}"
+        rows.append(("/mnt/data/PHOTOS/" + rel, json.dumps({"thumb": f"/static/thumbs/{key}.jpg"})))
+        for n in names:
+            c = clusters.setdefault(n, {"name": n, "photo_hashes": [], "excluded_hashes": []})
+            c["photo_hashes"].append(key)
+    clusters["x"] = {"name": "", "photo_hashes": [f"{0:032x}"]}          # unnamed: ignored
+    fc = tmp_path / "face_clusters.json"
+    fc.write_text(json.dumps({str(i): c for i, c in enumerate(clusters.values())}))
+    db = tmp_path / "photo_index.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE photos (path TEXT PRIMARY KEY, item TEXT NOT NULL)")
+    con.executemany("INSERT INTO photos VALUES (?,?)", rows)
+    con.commit(); con.close()
+    return PV.FaceIndex(str(fc), str(db), photos_root=root)
+
+
+def test_face_index_maps_photo_paths_to_named_people(tmp_path):
+    root = str(tmp_path / "PHOTOS")
+    fx = _faces(tmp_path, root, {"2024/a.jpg": ["zain", "hamza"], "2024/b.jpg": []})
+    assert fx.names(os.path.join(root, "2024/a.jpg")) == ["Hamza", "Zain"]
+    assert fx.names(os.path.join(root, "2024/b.jpg")) == []
+    assert fx.names(os.path.join(root, "nope.jpg")) == []
+
+
+def test_face_index_missing_files_means_no_names(tmp_path):
+    fx = PV.FaceIndex(str(tmp_path / "none.json"), str(tmp_path / "none.db"))
+    assert fx.names("/x.jpg") == [] and fx.loaded is False
+
+
+def test_people_go_into_prompt_text_and_meta(tmp_path):
+    root = str(tmp_path / "PHOTOS")
+    a = _write(root, "2024/a.jpg")
+    st = Store(str(tmp_path / "kg.db"))
+    _node(st, a)
+    g = _guard(tmp_path, root, vaulted=["x/zzz.jpg"])
+    fx = _faces(tmp_path, root, {"2024/a.jpg": ["zain", "hamza"]})
+    http = SpyHTTP(reply="Two friends at a cafe.")
+    PV.describe_pending(st, root, g, faces=fx, http=http, prepare=_ident, gpu_free=lambda: True)
+    assert "Hamza, Zain" in http.calls[0]["prompt"]
+    n = st.get_node("ARES:" + a)
+    assert n["meta"]["people"] == ["Hamza", "Zain"]
+    assert "People: Hamza, Zain" in n["understanding"]
+    assert [r["id"] for r in st.search("hamza cafe")] == ["ARES:" + a]
+    st.close()

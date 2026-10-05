@@ -16,18 +16,20 @@ docs/superpowers/specs/2026-10-04-photo-descriptions-design.md):
   5. no vault index, or an empty one, means no run at all.
 The vault index is read only to build these sets. Vault files are never opened.
 """
-import base64, hashlib, io, json, os, re, shutil, subprocess, tempfile, time
+import base64, hashlib, io, json, os, re, shutil, sqlite3, subprocess, tempfile, time
 
 from .walker import default_vault_pred
 from . import understanding as U
 
 VISION_MODEL = os.getenv("KG_VISION_MODEL", "gemma3:4b")
-VISION_VERSION = 1          # bump to re-describe everything with a new model/prompt
+VISION_VERSION = 2          # bump to re-describe everything (2: named faces as context)
 MAX_SIDE = 768
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"}
 DASH = "/mnt/nvme/PROMETHEUS/PROJECTS/ARES-DASHBOARD"
 VAULT_INDEX = os.getenv("KG_VAULT_INDEX", f"{DASH}/ai_data/vault.json")
 CONTENT_HASHES = os.getenv("KG_CONTENT_HASHES", f"{DASH}/content_hashes.json")
+FACE_CLUSTERS = os.getenv("KG_FACE_CLUSTERS", f"{DASH}/ai_data/face_clusters.json")
+PHOTO_INDEX = os.getenv("KG_PHOTO_INDEX", f"{DASH}/photo_index.db")
 PHOTOS_ROOT = "/mnt/nvme/PROMETHEUS/PHOTOS"
 ALIASES = ("/mnt/data/PHOTOS", PHOTOS_ROOT)   # LXC bind path and host path
 PROMPT = ("Describe this photo for a personal photo search index in one or two factual "
@@ -99,6 +101,59 @@ class VaultGuard:
         return hashlib.sha256(data).hexdigest() not in self.hashes
 
 
+class FaceIndex:
+    """People named in the dashboard's face clusters, per photo path. The clusters list
+    photos by thumb key; the dashboard's photo index maps path -> thumb key. Optional
+    context: missing or unreadable files just mean no names (loaded=False)."""
+
+    def __init__(self, clusters=FACE_CLUSTERS, photo_index=PHOTO_INDEX, photos_root=PHOTOS_ROOT):
+        self.root, self.by_path, self.loaded = photos_root, {}, False
+        try:
+            by_key = self._names_by_key(clusters)
+            self.by_path = self._paths(photo_index, by_key)
+            self.loaded = True
+        except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+            self.by_path = {}
+
+    @staticmethod
+    def _names_by_key(path):
+        with open(path) as f:
+            clusters = json.load(f)
+        by_key = {}
+        for c in clusters.values():
+            name = (c.get("name") or "").strip() if isinstance(c, dict) else ""
+            if not name or name.isdigit():
+                continue
+            gone = set(c.get("excluded_hashes") or [])
+            for k in c.get("photo_hashes") or []:
+                if k not in gone:
+                    by_key.setdefault(k, set()).add(name.title())
+        return by_key
+
+    def _paths(self, db_path, by_key):
+        if not os.path.isfile(db_path):
+            raise OSError("photo index missing")
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            out = {}
+            for path, item in con.execute("SELECT path, item FROM photos"):
+                key = (json.loads(item).get("thumb") or "").rsplit("/", 1)[-1].replace(".jpg", "")
+                if key in by_key:
+                    out[self._norm(path)] = sorted(by_key[key])
+            return out
+        finally:
+            con.close()
+
+    def _norm(self, p):
+        for a in ALIASES:
+            if p.startswith(a + "/"):
+                return self.root + p[len(a):]
+        return p
+
+    def names(self, path):
+        return list(self.by_path.get(path, []))
+
+
 def load_guard():
     """The production guard, or None when the vault index cannot be trusted."""
     try:
@@ -165,25 +220,35 @@ def _candidates(store, root, limit):
         (root.rstrip("/") + "/%", *sorted(IMAGE_EXT), VISION_VERSION, limit)).fetchall()
 
 
-def _merge(node, desc):
+def _prompt(people):
+    if not people:
+        return PROMPT
+    return (PROMPT + f" Face recognition identified these people in the photo: {', '.join(people)}."
+            " Refer to them by these names where it fits; do not add any other names.")
+
+
+def _merge(node, desc, people=()):
     ocr = (node.get("understanding") or "").strip() if node.get("status") == "live" else ""
     meta = dict(node.get("meta") or {})
     if ocr and "ocr" not in meta:
         meta["ocr"] = ocr[:4000]
     ocr = meta.get("ocr") or ""
+    meta["people"] = list(people)
     meta.update({"vision_model": VISION_MODEL, "vision_v": VISION_VERSION,
                  "described_at": int(time.time()), "method": "vision+ocr" if ocr else "vision"})
-    text = desc + (f"\n\nText in photo: {ocr}" if ocr else "")
+    text = desc + (f"\n\nPeople: {', '.join(people)}" if people else "")
+    text += f"\n\nText in photo: {ocr}" if ocr else ""
     return dict(node, understanding=text, status="live", meta=meta)
 
 
-def _describe_one(store, node, guard, http, prepare, scratch):
+def _describe_one(store, node, guard, http, prepare, scratch, faces=None):
     """Returns 'described', 'rejected' (node deleted) or 'failed'."""
     path = node["path"]
     if not guard.allowed(path):
         with store.db:
             _delete(store, node["id"])
         return "rejected"
+    people = faces.names(path) if faces else []
     try:
         if not guard.allowed_bytes(_raw(path)):
             with store.db:
@@ -194,7 +259,7 @@ def _describe_one(store, node, guard, http, prepare, scratch):
         return "failed"
     try:
         r = http(f"{U.OLLAMA_HOST}/api/generate", {
-            "model": VISION_MODEL, "prompt": PROMPT, "stream": False,
+            "model": VISION_MODEL, "prompt": _prompt(people), "stream": False,
             "images": [base64.b64encode(img).decode()],
             "options": {"num_predict": 120, "temperature": 0.2}})
         desc = clean(r.get("response"))
@@ -206,7 +271,7 @@ def _describe_one(store, node, guard, http, prepare, scratch):
         return "rejected"
     if not desc:
         return "failed"
-    store.upsert_node(_merge(node, desc))
+    store.upsert_node(_merge(node, desc, people))
     return "described"
 
 
@@ -216,7 +281,7 @@ def _raw(path):
 
 
 def describe_pending(store, root, guard, budget=500, minutes=None, http=None,
-                     prepare=None, gpu_free=None):
+                     prepare=None, gpu_free=None, faces=None):
     """Describe up to `budget` photos under `root` that lack a current description,
     newest first, stopping at the `minutes` deadline or when the GPU is not free."""
     assert guard is not None, "describe_pending needs a VaultGuard"
@@ -240,7 +305,7 @@ def describe_pending(store, root, guard, budget=500, minutes=None, http=None,
             if not gpu_free():
                 stats["stopped"] = "gpu-busy"
                 break
-            stats[_describe_one(store, store._row(r), guard, http, prepare, scratch)] += 1
+            stats[_describe_one(store, store._row(r), guard, http, prepare, scratch, faces)] += 1
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     return stats

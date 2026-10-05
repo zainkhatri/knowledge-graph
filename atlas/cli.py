@@ -116,7 +116,10 @@ def main(argv=None):
             guard = VaultGuard()                       # raises (non-zero exit) if untrusted
             print(prune_photos(st, a.root, guard))     # always prune first
             if a.cmd == "describe-photos":
-                print(describe_pending(st, a.root, guard, budget=a.budget, minutes=a.minutes))
+                from .photo_vision import FaceIndex
+                faces = FaceIndex()
+                print({"faces_loaded": faces.loaded, "photos_with_people": len(faces.by_path)})
+                print(describe_pending(st, a.root, guard, budget=a.budget, minutes=a.minutes, faces=faces))
         elif a.cmd == "embed-pending":
             from .embed_pending import embed_pending
             print(embed_pending(st, a.budget, workers=a.workers))

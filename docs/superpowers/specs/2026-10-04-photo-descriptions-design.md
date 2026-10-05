@@ -55,3 +55,13 @@ Vault files are never opened. The vault index is read only to build the sets.
 - First live prune (2026-10-04) removed 1,704 stale photo nodes (1,329 for files
   no longer at their path). The pre-change backup
   `data/homelab_kg.pre-photo-vision-2026-10-04.db` still holds those rows.
+
+## Faces as context (v2, same day)
+`FaceIndex` reads the dashboard's named face clusters (`ai_data/face_clusters.json`,
+125 named of 135) and its photo index (`photo_index.db`, path -> thumb key), giving
+names for 18,252 photos. Those names go into the prompt ("Face recognition
+identified these people...; do not add any other names") and into the node as a
+`People: A, B` line plus `meta.people`, so "hamza cafe laptop" finds the photo.
+Excluded faces (`excluded_hashes`) are honored. Names are looked up only for
+photos the VaultGuard already allowed. Missing face files just mean no names.
+`VISION_VERSION` 2 re-describes the v1 pilot photos.
