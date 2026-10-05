@@ -361,3 +361,20 @@ def test_face_index_resolves_stale_nested_photos_paths(tmp_path):
     fx = _faces(tmp_path, root, {"PHOTOS/FUJI/DSCF1.JPG": [(["zain"], _near(0), 0.9)]})
     assert fx.names(real) == ["Zain"]
     assert fx.names(os.path.join(root, "PHOTOS/FUJI/DSCF1.JPG")) == []    # no such file: no key
+
+
+def test_strong_stored_exemplar_counts_and_stale_one_is_ignored(tmp_path):
+    root = str(tmp_path / "PHOTOS")
+    side = _near(0, 6, 0.55)                    # a real other-angle face of Zain
+    probe = _near(0, 6, 2.0)                    # too far from Zain's frontal centroid alone
+    fx = _faces(tmp_path, root, {"2024/side.jpg": [(["zain"], probe, 0.9)]})
+    assert fx.names(os.path.join(root, "2024/side.jpg")) == []
+    cl = json.loads((tmp_path / "face_clusters.json").read_text())
+    for c in cl.values():
+        if c["name"] == "zain":
+            c["exemplars"] = [side.tolist(), _unit(4).tolist()]       # one strong, one stale
+    (tmp_path / "face_clusters.json").write_text(json.dumps(cl))
+    fx = PV.FaceIndex(str(tmp_path / "face_clusters.json"), str(tmp_path / "photo_index.db"),
+                      str(tmp_path / "face_index.json"), str(tmp_path / "face_embeddings.npy"), photos_root=root)
+    assert fx.names(os.path.join(root, "2024/side.jpg")) == ["Zain"]
+    assert len(fx.groups[[g[0] for g in fx.groups].index("Zain")][3]) == 2

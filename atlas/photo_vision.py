@@ -126,6 +126,7 @@ class FaceIndex:
     MIN_MARGIN = float(os.getenv("KG_FACE_MIN_MARGIN", "0.10"))
     ALIAS_DIST = 0.6
     MIN_FACES = 5
+    EXEMPLAR_OK = 0.8
 
     def __init__(self, clusters=FACE_CLUSTERS, photo_index=PHOTO_INDEX, faces=FACE_INDEX,
                  embeddings=FACE_EMB, photos_root=PHOTOS_ROOT):
@@ -167,21 +168,37 @@ class FaceIndex:
                     self.tags.setdefault(k, set()).add(name)
             idx = {int(i) for i in c.get("emb_indices") or [] if 0 <= int(i) < len(self.embs)}
             if len(idx) >= self.MIN_FACES:
-                profs.append((name, self._profile(idx), int(c.get("photo_count") or 0)))
+                cen = self._profile(idx)
+                profs.append((name, cen, int(c.get("photo_count") or 0),
+                              self._prototypes(cen, c.get("exemplars"))))
         self.groups = self._alias_groups(profs)
 
+    def _prototypes(self, cen, exemplars):
+        """The centroid plus stored exemplars that agree with the person's own faces
+        (<= EXEMPLAR_OK): strong hand-built models count, stale ones are ignored."""
+        np, out = self.np, [cen]
+        for ex in exemplars or []:
+            v = np.asarray(ex, dtype="float32")
+            if v.shape == cen.shape and np.linalg.norm(v) > 0:
+                v = v / np.linalg.norm(v)
+                if float(np.linalg.norm(v - cen)) <= self.EXEMPLAR_OK:
+                    out.append(v)
+        return np.stack(out)
+
     def _alias_groups(self, profs):
-        """[(display_name, member_names, centroid)]; merges near profiles sharing a word."""
+        """[(display_name, member_names, centroid, prototypes)]; merges near profiles that
+        share a word (their prototypes are pooled)."""
         np, groups = self.np, []
-        for name, cen, _ in sorted(profs, key=lambda p: -p[2]):     # biggest first names the group
+        for name, cen, _, protos in sorted(profs, key=lambda p: -p[2]):   # biggest names the group
             words = set(name.lower().split())
-            for g in groups:
+            for k, g in enumerate(groups):
                 same_word = any(words & set(m.lower().split()) for m in g[1])
                 if same_word and float(np.linalg.norm(g[2] - cen)) < self.ALIAS_DIST:
                     g[1].add(name)
+                    groups[k] = (g[0], g[1], g[2], np.concatenate([g[3], protos]))
                     break
             else:
-                groups.append((name, {name}, cen))
+                groups.append((name, {name}, cen, protos))
         return groups
 
     def _paths(self, db_path):
@@ -223,9 +240,10 @@ class FaceIndex:
         if float(face.get("det_score") or 0) < self.MIN_DET:
             return None
         e = self.embs[int(face["emb_idx"])]
-        d = sorted((float(self.np.linalg.norm(cen - e)), i) for i, (_, _, cen) in enumerate(self.groups))
+        d = sorted((float(self.np.min(self.np.linalg.norm(protos - e, axis=1))), i)
+                   for i, (_, _, _, protos) in enumerate(self.groups))
         (best, i), (second, _) = d[0], d[1]
-        name, members, _ = self.groups[i]
+        name, members, _, _ = self.groups[i]
         if best <= self.MAX_DIST and second - best >= self.MIN_MARGIN and members & tagged:
             return name
         return None
