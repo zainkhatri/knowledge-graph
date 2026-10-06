@@ -7,7 +7,7 @@ automatic. Silent when nothing relevant matches (a hit must share 2+ content wor
 the prompt) so unrelated chats get no noise. Logs each search to <state>/log.jsonl, which
 ares-code's atlas_stats op counts as "checked first".
 """
-import concurrent.futures
+import threading
 import math
 import json
 import os
@@ -34,7 +34,7 @@ JEV_TIMEOUT_S = 2.0
 JEV_CANDIDATES = 10
 SEARCH_POOL = 12
 CLIP = 260
-EMBED_TIMEOUT_S = 2.5
+EMBED_TIMEOUT_S = 1.0
 MIN_TOKENS = 2
 STOPWORDS = frozenset("""
 a about after again all also am an and any are as at be been but by can cant could did dont
@@ -131,15 +131,17 @@ def first_prompt(state_dir: Path, session_id: str) -> bool:
         return False
 
 
-def _bounded_embed(embed):
-    """Semantic search needs Ollama; cold it took 2.5 s. Past the budget, go keyword-only."""
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-
+def _bounded_embed(embed, timeout: float = EMBED_TIMEOUT_S):
+    """Semantic search needs Ollama: 0.3 s when it is free, but 45-60 s queued behind other
+    Ollama work (measured 2026-10-05). Past the budget, go keyword-only. The call runs on a
+    DAEMON thread: a ThreadPoolExecutor worker is joined at interpreter exit, so the hook
+    process lived until Ollama answered and Claude sat on its 6 s hook timeout every time."""
     def run(q):
-        try:
-            return pool.submit(embed, q).result(timeout=EMBED_TIMEOUT_S)
-        except Exception:
-            return None
+        box: list = []
+        t = threading.Thread(target=lambda: box.append(embed(q)), daemon=True)
+        t.start()
+        t.join(timeout)
+        return box[0] if box else None
     return run
 
 

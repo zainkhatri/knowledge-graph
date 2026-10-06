@@ -24,3 +24,6 @@ if __name__ == "__main__":
         main()
     except Exception:
         pass
+    # Claude waits for this process to exit: never let a straggling thread hold it open.
+    sys.stdout.flush()
+    os._exit(0)

@@ -124,3 +124,22 @@ def test_jev_filter_falls_back_on_error_or_no_key():
     assert H.jev_filter("p", hits, key="sk-or-x", http=boom) is None
     assert H.jev_filter("p", hits, key=None, http=boom) is None
     assert H.jev_filter("p", [], key="sk-or-x", http=boom) == []
+
+
+def test_bounded_embed_returns_fast_and_does_not_block_exit():
+    import subprocess, sys, textwrap, time
+    code = textwrap.dedent("""
+        import sys, time
+        sys.path.insert(0, ".")
+        from atlas.prompt_hook import _bounded_embed
+        print(_bounded_embed(lambda q: time.sleep(30), timeout=0.2)("x"))
+    """)
+    t = time.monotonic()
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=10)
+    assert out.stdout.strip() == "None"
+    assert time.monotonic() - t < 5     # the 30 s embed must not keep the process alive
+
+
+def test_bounded_embed_passes_a_quick_result():
+    from atlas.prompt_hook import _bounded_embed
+    assert _bounded_embed(lambda q: [1.0, 2.0], timeout=1.0)("x") == [1.0, 2.0]
