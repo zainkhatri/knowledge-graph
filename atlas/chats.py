@@ -103,6 +103,12 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
     hub_id = _ensure_hub(store, box)
 
     files = sorted(glob.glob(os.path.join(projects_root, "*", "*.jsonl")))[:MAX_FILES]
+    # a project dir that is a symlink to another dir in the same root (e.g. the
+    # ARES-FAILOVER aliases) would index each session under two paths; the path flip
+    # makes it look changed every run and re-summarizes it forever. Keep the real dir.
+    root_real = os.path.realpath(projects_root)
+    files = [f for f in files if not (os.path.islink(os.path.dirname(f)) and
+             os.path.dirname(os.path.realpath(os.path.dirname(f))) == root_real)]
     chats = linked = unchanged = 0
     todo = []                                    # (node, digest) awaiting a summary
     for path in files:
