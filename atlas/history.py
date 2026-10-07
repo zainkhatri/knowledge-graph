@@ -83,7 +83,7 @@ def index_history(store, path, box="ARES", summarize=True, summary_budget=None,
         added += 0 if prev else 1
         if summarize and (now - last) >= min_idle and \
                 (summary_budget is None or len(todo) < summary_budget):
-            dig = NOTE + "\n" + make_digest([("USER", x[:700]) for x in asks])
+            dig = NOTE + "\n" + make_digest([("USER", x[:700]) for x in asks], max_chars=U.digest_chars())
             todo.append((dict(node, _was_live=fresh), dig, {"title": None, "cwd": cwd}))
     store.db.commit()
     from .chats import _queue_too_big

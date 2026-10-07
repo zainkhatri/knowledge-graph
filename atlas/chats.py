@@ -147,7 +147,7 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
                 store.add_edge(a, cid, "contains"); linked += 1
         if wants_summary and tr["turns"] and \
                 (summary_budget is None or len(todo) < summary_budget):
-            todo.append((node, make_digest(tr["turns"]), tr))
+            todo.append((node, make_digest(tr["turns"], max_chars=U.digest_chars()), tr))
             requeue.append(bool(prev) and prev.get("status") == "live")
     store.db.commit()
 

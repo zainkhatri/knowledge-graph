@@ -77,6 +77,28 @@ PRICE_IN_PER_M = float(os.getenv("KG_PRICE_IN_PER_M", "0.10"))
 PRICE_OUT_PER_M = float(os.getenv("KG_PRICE_OUT_PER_M", "0.40"))
 
 
+# Ollama (small local model) times out on long digests; OpenRouter models take the full one.
+OPENROUTER_DIGEST_CHARS = 24000
+OLLAMA_DIGEST_CHARS = int(os.getenv("KG_OLLAMA_DIGEST_CHARS", "6000"))
+# kg-photo-vision.sh writes its PID here while gemma3 holds EROS's GPU (2026-10-07: Ollama
+# summaries attempted during photo runs failed ~5 of 6 and burned the daily call cap).
+PHOTO_ACTIVE_FLAG = os.getenv("KG_PHOTO_ACTIVE_FLAG", "/run/kg-photo-vision.active")
+
+
+def digest_chars():
+    return OPENROUTER_DIGEST_CHARS if openrouter_key() else OLLAMA_DIGEST_CHARS
+
+
+def photo_vision_busy():
+    """True while a live kg-photo-vision run holds the GPU (stale flag = not busy)."""
+    try:
+        pid = int(open(PHOTO_ACTIVE_FLAG).read().strip())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _cost(resp):
     u = (resp or {}).get("usage") or {}
     if isinstance(u.get("cost"), (int, float)):
@@ -111,17 +133,20 @@ def llm(prompt, max_tokens=400, http=None):
             except Exception:
                 continue
         return None
-    if gpu_on_loan():
-        return None
-    if not budget.reserve():
+    if gpu_on_loan() or photo_vision_busy():
+        return None                     # GPU busy: leave it raw, a later run retries
+    if not budget.can_call():           # Ollama is free: only SUCCESSFUL calls are counted
         raise BudgetExceeded("atlas daily LLM budget reached")
     payload = json.dumps({"model": OLLAMA_MODEL, "prompt": prompt,
                           "stream": False, "options": {"temperature": 0.2}}).encode()
     try:
         resp = _http_post(f"{OLLAMA_HOST}/api/generate", payload)
-        return (resp.get("response") or "").strip() or None
     except Exception:
         return None
+    text = (resp.get("response") or "").strip() or None
+    if text:
+        budget.count_call()
+    return text
 
 
 def build_session_prompt(digest, title=None, cwd=None, box=None):

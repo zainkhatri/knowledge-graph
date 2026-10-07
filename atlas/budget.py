@@ -65,6 +65,26 @@ def reserve():
     return ok
 
 
+def can_call():
+    """Cap check WITHOUT spending a call (Ollama: only successful calls count, see
+    count_call). False past either cap; alerts once per day."""
+    def go(st):
+        if st["calls"] >= DAILY_CALLS or st["usd"] >= DAILY_USD:
+            first = not st.get("alerted")
+            st["alerted"] = True
+            return False, first, dict(st)
+        return True, False, None
+    ok, first, snap = _update(go)
+    if first:
+        alert(f"daily cap hit ({snap['calls']}/{DAILY_CALLS} calls, ${snap['usd']:.3f}/"
+              f"${DAILY_USD:.2f}); LLM summaries paused until tomorrow")
+    return ok
+
+
+def count_call():
+    _update(lambda st: st.__setitem__("calls", st["calls"] + 1))
+
+
 def record_cost(usd):
     if usd and usd > 0:
         _update(lambda st: st.__setitem__("usd", round(st["usd"] + float(usd), 6)))

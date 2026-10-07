@@ -119,3 +119,52 @@ def test_history_first_summaries_are_not_blocked(tmp_path, monkeypatch, state):
     res = index_history(st, str(h), box="ARES", min_idle=0, embed_fn=lambda t: None)
     assert len(calls) == 3 and res["added"] == 3
     st.close()
+
+
+# --- 2026-10-07: Ollama fallback wasted the daily cap on timeouts while photos held EROS's GPU ---
+def _no_key(monkeypatch):
+    monkeypatch.setattr(U, "openrouter_key", lambda: None)
+    monkeypatch.setattr(U, "gpu_on_loan", lambda: False)
+
+
+def test_ollama_paused_while_photo_vision_runs(state, monkeypatch, tmp_path):
+    _no_key(monkeypatch)
+    flag = tmp_path / "photo.active"; flag.write_text(str(os.getpid()))   # a live pid
+    monkeypatch.setattr(U, "PHOTO_ACTIVE_FLAG", str(flag))
+    called = []
+    monkeypatch.setattr(U, "_http_post", lambda url, data: called.append(1) or {"response": "x"})
+    assert U.llm("hi") is None and called == [] and B.status()["calls"] == 0
+    flag.write_text("999999999")                                        # stale flag: dead pid
+    assert U.llm("hi") == "x" and len(called) == 1
+
+
+def test_failed_ollama_calls_do_not_consume_the_cap(state, monkeypatch):
+    _no_key(monkeypatch)
+    def boom(url, data):
+        raise OSError("timeout")
+    monkeypatch.setattr(U, "_http_post", boom)
+    for _ in range(5):                                   # DAILY_CALLS is 3 in this fixture
+        assert U.llm("hi") is None
+    assert B.status()["calls"] == 0
+    monkeypatch.setattr(U, "_http_post", lambda url, data: {"response": "ok"})
+    assert [U.llm("hi") for _ in range(3)] == ["ok"] * 3
+    with pytest.raises(U.OutOfCredit):                   # successes still hit the cap
+        U.llm("hi")
+
+
+def test_ollama_gets_a_short_digest(state, monkeypatch, tmp_path):
+    from atlas.chats import index_chats
+    _no_key(monkeypatch)
+    seen = []
+    monkeypatch.setattr("atlas.understanding.summarize_session",
+                        lambda d, **k: seen.append(len(d)) or "S.")
+    st = Store(str(tmp_path / "kg.db"))
+    d = tmp_path / "r" / "proj"; d.mkdir(parents=True)
+    with open(d / "s1.jsonl", "w") as f:
+        for i in range(400):
+            f.write(json.dumps({"type": "user", "cwd": "/x", "message": {"content": f"ask {i} " + "y" * 300}}) + "\n")
+    index_chats(st, projects_root=str(tmp_path / "r"), box="ARES", min_idle=0, embed_fn=lambda t: None)
+    assert seen and seen[0] <= U.OLLAMA_DIGEST_CHARS + 600
+    monkeypatch.setattr(U, "openrouter_key", lambda: "sk-or-x")
+    assert U.digest_chars() == U.OPENROUTER_DIGEST_CHARS > U.OLLAMA_DIGEST_CHARS
+    st.close()
