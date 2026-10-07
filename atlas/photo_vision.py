@@ -28,6 +28,8 @@ IMAGE_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"}
 DASH = "/mnt/nvme/PROMETHEUS/PROJECTS/ARES-DASHBOARD"
 VAULT_INDEX = os.getenv("KG_VAULT_INDEX", f"{DASH}/ai_data/vault.json")
 CONTENT_HASHES = os.getenv("KG_CONTENT_HASHES", f"{DASH}/content_hashes.json")
+# library copies that look like a vaulted photo (ARES-DASHBOARD system/vault_lookalike_sweep.py)
+LOOKALIKES = os.getenv("KG_VAULT_LOOKALIKES", f"{DASH}/ai_data/vault_lookalikes.json")
 FACE_CLUSTERS = os.getenv("KG_FACE_CLUSTERS", f"{DASH}/ai_data/face_clusters.json")
 PHOTO_INDEX = os.getenv("KG_PHOTO_INDEX", f"{DASH}/photo_index.db")
 FACE_INDEX = os.getenv("KG_FACE_INDEX", f"{DASH}/ai_data/face_index.json")
@@ -52,7 +54,7 @@ class VaultIndexError(RuntimeError):
 
 class VaultGuard:
     def __init__(self, vault_index=VAULT_INDEX, content_hashes=CONTENT_HASHES,
-                 photos_root=PHOTOS_ROOT):
+                 photos_root=PHOTOS_ROOT, lookalikes=LOOKALIKES):
         self.root = photos_root
         self.pred = default_vault_pred()
         try:
@@ -67,6 +69,11 @@ class VaultGuard:
         if not all(paths) or len(paths) != len(items):
             raise VaultIndexError("vault index has items without a path; refusing to run")
         self.names = {os.path.basename(p).lower() for p in self.paths}
+        try:                                   # look-alike copies are vaulted too (paths only;
+            with open(lookalikes) as f:        # their names are ordinary, so not added to names)
+                self.paths |= {self._norm(p) for p in json.load(f).values() if p}
+        except (OSError, ValueError, AttributeError):
+            pass
         self.hashes = self._known_hashes(content_hashes)
 
     def _norm(self, p):

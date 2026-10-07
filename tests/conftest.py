@@ -30,3 +30,9 @@ def _private_budget(monkeypatch, tmp_path):
     monkeypatch.setattr(B, "ALERT_FILE", str(tmp_path / "atlas-ALERT"))
     monkeypatch.setattr(B, "DAILY_CALLS", 10_000)
     monkeypatch.setattr(B, "DAILY_USD", 100.0)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_photo_busy_flag(monkeypatch, tmp_path):
+    """The live kg-photo-vision busy flag must not leak into tests (it pauses Ollama)."""
+    monkeypatch.setattr("atlas.understanding.PHOTO_ACTIVE_FLAG", str(tmp_path / "no-photo-run"))

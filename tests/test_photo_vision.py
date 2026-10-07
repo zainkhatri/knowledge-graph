@@ -429,3 +429,16 @@ def test_prune_keeps_existing_folder_nodes(tmp_path):
     assert st.get_node("ARES:" + os.path.join(root, "gone_dir")) is None
     assert res["pruned"] == 1
     st.close()
+
+
+def test_guard_treats_vault_lookalikes_as_vaulted(tmp_path):
+    root = str(tmp_path / "PHOTOS")
+    twin = _write(root, "GOOGLE/2024/takeout_copy.jpg")
+    other = _write(root, "GOOGLE/2024/fine.jpg")
+    vi, ch = _vault_index(tmp_path, [os.path.join(root, ".vault", "iPhone/x.jpg")])
+    la = tmp_path / "vault_lookalikes.json"
+    la.write_text(json.dumps({"k1": twin}))
+    g = PV.VaultGuard(vi, ch, photos_root=root, lookalikes=str(la))
+    assert not g.allowed(twin) and g.allowed(other)
+    g2 = PV.VaultGuard(vi, ch, photos_root=root, lookalikes=str(tmp_path / "missing.json"))
+    assert g2.allowed(twin)                                   # no sweep yet: unchanged behaviour
