@@ -265,6 +265,27 @@ def load_guard():
         return None
 
 
+def guard_files_under_photos(base_pred, guard=None, loader=None):
+    """Wrap a walker/content vault predicate so every FILE under PHOTOS_ROOT must also pass
+    the VaultGuard, whatever root the walk started from. Directories are not judged (the
+    guard only rules on files; dot-dir vaults are already caught by base_pred). The guard
+    loads lazily, once; if it cannot be trusted every file under PHOTOS is excluded.
+    Why: 2026-10-07 the pool-wide content pass (root /mnt/nvme/PROMETHEUS, no guard) OCR'd
+    ~300 vaulted originals into the graph every day."""
+    state = {"g": guard, "loaded": guard is not None}
+
+    def pred(path):
+        if base_pred(path):
+            return True
+        root = PHOTOS_ROOT
+        if not path.startswith(root + "/") or not os.path.isfile(path):
+            return False
+        if not state["loaded"]:
+            state["g"], state["loaded"] = (loader or load_guard)(), True
+        return state["g"] is None or not state["g"].allowed(path)
+    return pred
+
+
 def visible(node, guard):
     """Query-time filter: photo-derived nodes show only while the guard still allows
     their file. No guard means no photo nodes (fail closed); other kinds untouched."""
@@ -421,7 +442,10 @@ def prune_photos(store, root, guard):
     rows = store.db.execute(
         "SELECT id, path FROM nodes WHERE kind IN ('file-content','file-cluster') AND path LIKE ?",
         (root.rstrip("/") + "/%",)).fetchall()
-    doomed = [r["id"] for r in rows if not guard.allowed(r["path"])]
+    # the guard rules on files only; an existing folder node (walker file-cluster/folder)
+    # is not a leak, and deleting it made the walker re-add it every day (366/night churn)
+    doomed = [r["id"] for r in rows
+              if not os.path.isdir(r["path"]) and not guard.allowed(r["path"])]
     if doomed:
         with store.db:
             for nid in doomed:

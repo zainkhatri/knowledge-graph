@@ -378,3 +378,54 @@ def test_strong_stored_exemplar_counts_and_stale_one_is_ignored(tmp_path):
                       str(tmp_path / "face_index.json"), str(tmp_path / "face_embeddings.npy"), photos_root=root)
     assert fx.names(os.path.join(root, "2024/side.jpg")) == ["Zain"]
     assert len(fx.groups[[g[0] for g in fx.groups].index("Zain")][3]) == 2
+
+
+# --- 2026-10-07 leak: pool-wide content pass walked into PHOTOS with no guard ---------
+def _pool(tmp_path):
+    pool = str(tmp_path / "POOL")
+    photos = os.path.join(pool, "PHOTOS")
+    ok = _write(photos, "2024/ok.txt", b"harbour trip notes")
+    vaulted = _write(photos, "2024/later.txt", b"private words")
+    other = _write(pool, "docs/readme.txt", b"pool readme words")
+    return pool, photos, ok, vaulted, other
+
+
+def test_pool_wide_content_pass_never_indexes_vaulted_files(tmp_path, monkeypatch):
+    pool, photos, ok, vaulted, other = _pool(tmp_path)
+    g = _guard(tmp_path, photos, vaulted=["2024/later.txt"])
+    monkeypatch.setattr(PV, "PHOTOS_ROOT", photos)
+    monkeypatch.setattr(PV, "load_guard", lambda: g)
+    st = Store(str(tmp_path / "kg.db"))
+    index_content(st, pool, "ARES", budget=50)                  # no guard passed: the old leak
+    assert st.get_node("ARES:" + vaulted) is None
+    assert st.get_node("ARES:" + ok) and st.get_node("ARES:" + other)
+    assert not st.search("private")
+    st.close()
+
+
+def test_no_trusted_guard_means_nothing_under_photos_is_read(tmp_path, monkeypatch):
+    pool, photos, ok, vaulted, other = _pool(tmp_path)
+    monkeypatch.setattr(PV, "PHOTOS_ROOT", photos)
+    monkeypatch.setattr(PV, "load_guard", lambda: None)         # vault index unreadable
+    st = Store(str(tmp_path / "kg.db"))
+    index_content(st, pool, "ARES", budget=50)
+    assert st.get_node("ARES:" + ok) is None and st.get_node("ARES:" + vaulted) is None
+    assert st.get_node("ARES:" + other)                         # outside PHOTOS still indexed
+    st.close()
+
+
+def test_prune_keeps_existing_folder_nodes(tmp_path):
+    root = str(tmp_path / "PHOTOS")
+    _write(root, "2024/a.jpg")
+    os.makedirs(os.path.join(root, "gone_dir"))
+    st = Store(str(tmp_path / "kg.db"))
+    for p, kind in ((os.path.join(root, "2024"), "file-cluster"),
+                    (os.path.join(root, "gone_dir"), "file-cluster")):
+        st.upsert_node({"id": "ARES:" + p, "box": "ARES", "kind": kind, "path": p,
+                        "name": os.path.basename(p), "understanding": "photos"})
+    os.rmdir(os.path.join(root, "gone_dir"))
+    res = PV.prune_photos(st, root, _guard(tmp_path, root, vaulted=["2023/other.jpg"]))
+    assert st.get_node("ARES:" + os.path.join(root, "2024"))    # real folder kept (was churned nightly)
+    assert st.get_node("ARES:" + os.path.join(root, "gone_dir")) is None
+    assert res["pruned"] == 1
+    st.close()

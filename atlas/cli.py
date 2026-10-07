@@ -60,6 +60,7 @@ def main(argv=None):
     gt.add_argument("--workers", type=int, default=8)
     ep = sub.add_parser("embed-pending"); ep.add_argument("--budget", type=int, default=5000)
     ep.add_argument("--workers", type=int, default=4)
+    ep.add_argument("--photos", action="store_true", help="vectors for vision-described photos")
     ur = sub.add_parser("usage-report"); ur.add_argument("--days", type=int, default=7)
     ur.add_argument("--archive", default="/mnt/nvme/PROMETHEUS/PERSONAL/CLAUDE-CODE-SESSIONS")
     ur.add_argument("--log", default="/var/log/kg-usage.jsonl", help="append one JSON line here ('' = don't)")
@@ -123,7 +124,7 @@ def main(argv=None):
                 print(describe_pending(st, a.root, guard, budget=a.budget, minutes=a.minutes, faces=faces))
         elif a.cmd == "embed-pending":
             from .embed_pending import embed_pending
-            print(embed_pending(st, a.budget, workers=a.workers))
+            print(embed_pending(st, a.budget, workers=a.workers, photos=a.photos))
         elif a.cmd == "gen-titles":
             from .titles import gen_titles
             print(gen_titles(st, a.budget, a.workers))

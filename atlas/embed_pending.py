@@ -10,19 +10,26 @@ from concurrent.futures import ThreadPoolExecutor
 KINDS = ("chat", "gpt-chat", "claude-chat")
 
 
-def _missing_count(store, ph, kinds):
+PHOTO_ONLY = " AND json_extract(meta,'$.vision_v')>=1"   # described photos, not every OCR'd file
+
+
+def _missing_count(store, ph, kinds, extra=""):
     return store.db.execute(
         f"SELECT count(*) FROM nodes WHERE status='live' AND embedding IS NULL"
-        f" AND trim(coalesce(understanding,''))!='' AND kind IN ({ph})", kinds).fetchone()[0]
+        f" AND trim(coalesce(understanding,''))!='' AND kind IN ({ph}){extra}", kinds).fetchone()[0]
 
 
-def embed_pending(store, budget=5000, kinds=KINDS, embed_fn=None, workers=4):
+def embed_pending(store, budget=5000, kinds=KINDS, embed_fn=None, workers=4, photos=False):
+    """photos=True: vectors for vision-described photos (file-content with meta.vision_v)."""
     from . import embeddings as E
     embed_fn = embed_fn or E.embed
+    if photos:
+        kinds = ("file-content",)
+    extra = PHOTO_ONLY if photos else ""
     ph = ",".join("?" * len(kinds))
     rows = store.db.execute(
         f"SELECT id, understanding FROM nodes WHERE status='live' AND embedding IS NULL"
-        f" AND trim(coalesce(understanding,''))!='' AND kind IN ({ph}) LIMIT ?",
+        f" AND trim(coalesce(understanding,''))!='' AND kind IN ({ph}){extra} LIMIT ?",
         (*kinds, int(budget))).fetchall()
     done = failed = 0
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
@@ -36,4 +43,4 @@ def embed_pending(store, budget=5000, kinds=KINDS, embed_fn=None, workers=4):
                 store.db.execute("UPDATE nodes SET embedding=? WHERE id=?", (blob, nid))
             done += 1
     return {"embedded": done, "failed": failed,
-            "still_missing": _missing_count(store, ph, kinds)}
+            "still_missing": _missing_count(store, ph, kinds, extra)}

@@ -30,3 +30,15 @@ def test_budget_and_failures(tmp_path):
     res = embed_pending(st, budget=3, embed_fn=lambda t, http=None: None, workers=2)
     assert res["embedded"] == 0 and res["failed"] == 3 and res["still_missing"] == 5
     st.close()
+
+
+def test_photos_flag_embeds_only_described_photos(tmp_path):
+    st = Store(str(tmp_path / "kg.db"))
+    st.upsert_node({"id": "p1", "box": "ARES", "kind": "file-content", "path": "/P/a.jpg", "name": "a",
+                    "understanding": "A dog on a beach.", "status": "live", "meta": {"vision_v": 1}})
+    st.upsert_node({"id": "d1", "box": "ARES", "kind": "file-content", "path": "/x/doc.txt", "name": "d",
+                    "understanding": "some document text", "status": "live", "meta": {}})
+    res = embed_pending(st, budget=10, embed_fn=lambda t, http=None: [1.0], workers=1, photos=True)
+    assert res["embedded"] == 1
+    assert st.get_node("p1")["embedding"] is not None and st.get_node("d1")["embedding"] is None
+    st.close()

@@ -133,6 +133,8 @@ def index_content(store, root, box="ARES", vault_pred=None, budget=500,
     """
     exts = SUPPORTED_EXT - IMAGE_EXT if docs_only else SUPPORTED_EXT
     vault_pred = vault_pred if vault_pred is not None else default_vault_pred()
+    from .photo_vision import guard_files_under_photos      # lazy: photo_vision imports content
+    vault_pred = guard_files_under_photos(vault_pred, guard=guard)
     tesseract = tesseract or _run_tesseract
     # Photos are described by atlas.photo_vision (vault-guarded, nightly); the
     # content pass itself never sends images to a vision model by default.
