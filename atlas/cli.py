@@ -55,6 +55,7 @@ def main(argv=None):
     pp = sub.add_parser("prune-photos"); pp.add_argument("root")
     sub.add_parser("link-workdirs")
     sub.add_parser("fix-names")
+    sub.add_parser("budget-status")
     gt = sub.add_parser("gen-titles"); gt.add_argument("--budget", type=int, default=5000)
     gt.add_argument("--workers", type=int, default=8)
     ep = sub.add_parser("embed-pending"); ep.add_argument("--budget", type=int, default=5000)
@@ -126,6 +127,9 @@ def main(argv=None):
         elif a.cmd == "gen-titles":
             from .titles import gen_titles
             print(gen_titles(st, a.budget, a.workers))
+        elif a.cmd == "budget-status":
+            from .budget import status
+            print(json.dumps(status()))
         elif a.cmd == "fix-names":
             from .names import fix_names
             print(fix_names(st))

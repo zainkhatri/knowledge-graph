@@ -68,19 +68,43 @@ def _openrouter_post(key, body, timeout=90):
         raise
 
 
+class BudgetExceeded(OutOfCredit):
+    """atlas.budget daily cap reached. An OutOfCredit, so every caller already stops cleanly."""
+
+
+# Fallback price (USD per 1M tokens, gemini-2.5-flash-lite) when OpenRouter omits usage.cost.
+PRICE_IN_PER_M = float(os.getenv("KG_PRICE_IN_PER_M", "0.10"))
+PRICE_OUT_PER_M = float(os.getenv("KG_PRICE_OUT_PER_M", "0.40"))
+
+
+def _cost(resp):
+    u = (resp or {}).get("usage") or {}
+    if isinstance(u.get("cost"), (int, float)):
+        return float(u["cost"])
+    return (u.get("prompt_tokens", 0) * PRICE_IN_PER_M +
+            u.get("completion_tokens", 0) * PRICE_OUT_PER_M) / 1e6
+
+
 def llm(prompt, max_tokens=400, http=None):
     """One completion. The prompt is ALWAYS redacted first. OpenRouter when a key exists
     (remote, so the GPU loan does not apply), else local Ollama (skipped under .gpu-on-loan).
-    Returns None on failure after 3 tries; raises OutOfCredit on HTTP 402."""
+    Every attempt first reserves from the daily budget (atlas.budget) and every OpenRouter
+    response's cost is recorded. Returns None on failure after 3 tries; raises OutOfCredit
+    on HTTP 402 and BudgetExceeded (an OutOfCredit) past the daily cap."""
+    from . import budget
     prompt = redact(prompt)
     key = openrouter_key()
     if key:
         body = {"model": SUMMARY_MODEL, "max_tokens": max_tokens, "temperature": 0.2,
-                "messages": [{"role": "user", "content": prompt}]}
+                "messages": [{"role": "user", "content": prompt}],
+                "usage": {"include": True}}            # ask OpenRouter for the real cost
         caller = http or _openrouter_post
         for _attempt in range(3):
+            if not budget.reserve():
+                raise BudgetExceeded("atlas daily LLM budget reached")
             try:
                 resp = caller(key, body)
+                budget.record_cost(_cost(resp))
                 return (resp["choices"][0]["message"]["content"] or "").strip() or None
             except OutOfCredit:
                 raise
@@ -89,6 +113,8 @@ def llm(prompt, max_tokens=400, http=None):
         return None
     if gpu_on_loan():
         return None
+    if not budget.reserve():
+        raise BudgetExceeded("atlas daily LLM budget reached")
     payload = json.dumps({"model": OLLAMA_MODEL, "prompt": prompt,
                           "stream": False, "options": {"temperature": 0.2}}).encode()
     try:

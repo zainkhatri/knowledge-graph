@@ -15,6 +15,7 @@ HUB_PATH = "/mnt/nvme/PROMETHEUS/CLAUDE-CHATS"
 # candidate box-root node paths to hang the chats hub under (best-effort)
 ROOT_CANDS = ["/mnt/nvme/PROMETHEUS", "/srv/mergerfs/PROMETHEUS", "/srv", "/root"]
 MAX_FILES = 200_000
+QUEUE_ALERT = int(os.environ.get("KG_QUEUE_ALERT", "150"))
 SUMMARY_VERSION = 2          # bump to force every session to be re-summarized once
 
 
@@ -111,6 +112,7 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
              os.path.dirname(os.path.realpath(os.path.dirname(f))) == root_real)]
     chats = linked = unchanged = 0
     todo = []                                    # (node, digest) awaiting a summary
+    requeue = []                                 # per todo item: was it already summarized?
     for path in files:
         sid = os.path.splitext(os.path.basename(path))[0]
         cid = f"{box}:chat/{sid}"
@@ -120,7 +122,14 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
             continue
         chats += 1
         prev = store.get_node(cid)
-        same = bool(prev) and prev.get("fingerprint") == fp and prev.get("path") == path
+        # identity is the CONTENT (mtime:size), not the path. The same file reached through
+        # another path (alias dir, moved archive) only updates the stored path. Treating a
+        # path change as a change re-summarized ~3,300 sessions every hour, Oct 1-5 2026.
+        same = bool(prev) and prev.get("fingerprint") == fp
+        if same and prev.get("path") != path:
+            with store.db:
+                store.db.execute("UPDATE nodes SET path=? WHERE id=?", (path, cid))
+            prev["path"] = path
         fresh = bool(prev) and prev.get("status") == "live" and \
             (prev.get("meta") or {}).get("sv") == SUMMARY_VERSION
         idle = (now - mt) >= min_idle
@@ -139,12 +148,32 @@ def index_chats(store, projects_root="/root/.claude/projects", box="ARES",
         if wants_summary and tr["turns"] and \
                 (summary_budget is None or len(todo) < summary_budget):
             todo.append((node, make_digest(tr["turns"]), tr))
+            requeue.append(bool(prev) and prev.get("status") == "live")
     store.db.commit()
 
+    queued, n_re = len(todo), sum(requeue)
+    blocked = _queue_too_big(n_re, box)
+    if blocked:                                  # drop re-summaries; first summaries still run
+        todo = [t for t, again in zip(todo, requeue) if not again]
     summarized, out_of_credit = _summarize_batch(store, todo, box, U, embed_fn, workers)
     return {"chats": chats, "unchanged": unchanged, "project_linked": linked,
-            "summarized": summarized, "queued": len(todo), "out_of_credit": out_of_credit,
-            "hub": hub_id}
+            "summarized": summarized, "queued": queued, "requeued": n_re,
+            "queue_blocked": blocked, "out_of_credit": out_of_credit, "hub": hub_id}
+
+
+def _queue_too_big(n, box):
+    """n = ALREADY-SUMMARIZED sessions queued again this run. A few per hour is normal
+    (sessions that continued). Past QUEUE_ALERT it is the Oct 2026 loop signature (old
+    sessions re-flagged every run): alert and skip them. First summaries are not counted;
+    the daily cap in atlas.budget drains that backlog. Deliberate re-summary (e.g. a
+    SUMMARY_VERSION bump) sets KG_ALLOW_BIG_QUEUE=1."""
+    if n <= QUEUE_ALERT or os.environ.get("KG_ALLOW_BIG_QUEUE") == "1":
+        return False
+    from .budget import alert
+    alert(f"{box}: {n} already-summarized sessions queued again in one run (limit "
+          f"{QUEUE_ALERT}); skipped them. Check for a re-index loop, or rerun with "
+          "KG_ALLOW_BIG_QUEUE=1 if the re-summary is deliberate")
+    return True
 
 
 def _summarize_batch(store, todo, box, U, embed_fn, workers):

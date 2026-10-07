@@ -20,3 +20,13 @@ def _no_real_network(monkeypatch):
     monkeypatch.setattr("atlas.understanding._http_post", offline)
     monkeypatch.setattr("atlas.understanding._openrouter_post", offline)
     monkeypatch.setattr("atlas.embeddings._http_post", offline)
+
+
+@pytest.fixture(autouse=True)
+def _private_budget(monkeypatch, tmp_path):
+    """Never touch the live daily budget/alert files; generous caps unless a test lowers them."""
+    from atlas import budget as B
+    monkeypatch.setattr(B, "STATE", str(tmp_path / "llm-budget.json"))
+    monkeypatch.setattr(B, "ALERT_FILE", str(tmp_path / "atlas-ALERT"))
+    monkeypatch.setattr(B, "DAILY_CALLS", 10_000)
+    monkeypatch.setattr(B, "DAILY_USD", 100.0)
