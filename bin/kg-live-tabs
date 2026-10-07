@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Claude Code hook → atlas.live_tabs. `kg-live-tabs prompt` (UserPromptSubmit) or
+`kg-live-tabs pretool` (PreToolUse on Edit/Write). Never blocks: errors print nothing."""
+import json, os, sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+
+def main():
+    from atlas import live_tabs as L
+    inp = json.load(sys.stdin)
+    mode = sys.argv[1] if len(sys.argv) > 1 else "prompt"
+    if mode == "pretool":
+        out = L.run_pretool(inp)
+    else:
+        if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+            return                                   # headless runs: no chatter
+        out = L.run_prompt(inp, str(Path.home() / ".claude" / "live-tabs"))
+    if out:
+        print(json.dumps(out))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        pass
+    sys.stdout.flush()
+    os._exit(0)
