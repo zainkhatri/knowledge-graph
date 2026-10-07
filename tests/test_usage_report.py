@@ -43,3 +43,45 @@ def test_report_aggregates_recent_only(tmp_path):
     assert r["sessions"] == 2 and r["sessions_using_graph"] == 1
     assert r["graph_use_pct"] == 50.0 and r["kg_empty_pct"] == 0.0
     assert r["discovery_calls"] == 1
+
+
+def _write_raw(tmp_path, name, lines, mtime=None):
+    d = tmp_path / "ARES" / "proj"; d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{name}.jsonl"
+    p.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+    return str(p)
+
+
+def _ctx(text):
+    return {"type": "attachment", "entrypoint": "cli",
+            "attachment": {"type": "hook_additional_context", "content": [text]}}
+
+
+def _tool(i, name, entry="cli"):
+    return {"type": "assistant", "entrypoint": entry,
+            "message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": name, "input": {}}]}}
+
+
+def test_scan_detects_headless_and_auto_context(tmp_path):
+    p = _write_raw(tmp_path, "h", [_tool(1, "Read", entry="sdk-cli")])
+    s = scan_session(p)
+    assert s["headless"] is True and s["auto_ctx"] == 0
+    p = _write_raw(tmp_path, "i", [_ctx("ATLAS was searched automatically ... (homelab-kg). Past work"),
+                                   _ctx("unrelated hook text"), _tool(1, "Grep")])
+    s = scan_session(p)
+    assert s["headless"] is False and s["auto_ctx"] == 1
+
+
+def test_report_splits_interactive_and_headless(tmp_path):
+    _write_raw(tmp_path, "i1", [_ctx("Recent past Claude Code sessions for this project (homelab-kg)."),
+                                _tool(1, "Grep")])                         # auto context only
+    _write_raw(tmp_path, "i2", [_tool(1, "mcp__homelab-kg__kg_search")])   # explicit call
+    _write_raw(tmp_path, "i3", [_tool(1, "Read")])                         # no graph
+    _write_raw(tmp_path, "h1", [_tool(1, "Read", entry="sdk-cli")])        # headless
+    r = report(str(tmp_path), days=7)
+    assert r["interactive"]["sessions"] == 3 and r["headless"]["sessions"] == 1
+    assert r["interactive"]["explicit_use_pct"] == 33.3       # i2
+    assert r["interactive"]["any_use_pct"] == 66.7            # i1 + i2
+    assert r["interactive"]["discovery_calls"] == 2
+    assert r["headless"]["any_use_pct"] == 0.0
+    assert r["sessions"] == 4                                 # totals kept for the old series
