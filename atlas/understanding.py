@@ -50,19 +50,9 @@ class OutOfCredit(Exception):
 
 
 def openrouter_key():
-    """OPENROUTER_API_KEY env, else the key in ~/.claude/settings.json (fast-jev-compaction)."""
-    k = os.getenv("OPENROUTER_API_KEY")
-    if k:
-        return k
-    for p in ("/root/.claude/settings.json", os.path.expanduser("~/.claude/settings.json")):
-        try:
-            with open(p) as f:
-                k = json.load(f).get("env", {}).get("OPENROUTER_API_KEY")
-            if k:
-                return k
-        except Exception:
-            continue
-    return None
+    """ATLAS_OPENROUTER_API_KEY env only. Never falls back to ~/.claude/settings.json —
+    that key is reserved for fast-jev-compaction and must never serve another model."""
+    return os.getenv("ATLAS_OPENROUTER_API_KEY")
 
 
 def _openrouter_post(key, body, timeout=90):
