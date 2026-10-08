@@ -21,7 +21,8 @@ import base64, hashlib, io, json, os, re, shutil, sqlite3, subprocess, tempfile,
 from .walker import default_vault_pred
 from . import understanding as U
 
-VISION_MODEL = os.getenv("KG_VISION_MODEL", "gemma3:4b")
+VISION_MODEL = os.getenv("KG_VISION_MODEL", "gemma3:4b")          # EROS GTX 1070 fallback
+LOCAL_VISION_MODEL = os.getenv("KG_LOCAL_VISION_MODEL", "qwen2.5vl:7b")  # ARES RTX 3080 (preferred), same model as text: no swaps
 VISION_VERSION = 4          # bump to re-describe everything (4: calibrated face profiles)
 MAX_SIDE = 768
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"}
@@ -358,14 +359,22 @@ def _prompt(people):
             " Refer to them by these names where it fits; do not add any other names.")
 
 
-def _merge(node, desc, people=()):
+def _vision_backend():
+    """(host, model): ARES's 3080 with the 12B model when it is up and not on loan to VM 200,
+    else EROS with the 4B model. Both are local; photos never leave your machines."""
+    if U._ares_up():
+        return U.LOCAL_LLM_HOST, LOCAL_VISION_MODEL
+    return U.OLLAMA_HOST, VISION_MODEL
+
+
+def _merge(node, desc, people=(), model=VISION_MODEL):
     ocr = (node.get("understanding") or "").strip() if node.get("status") == "live" else ""
     meta = dict(node.get("meta") or {})
     if ocr and "ocr" not in meta:
         meta["ocr"] = ocr[:4000]
     ocr = meta.get("ocr") or ""
     meta["people"] = list(people)
-    meta.update({"vision_model": VISION_MODEL, "vision_v": VISION_VERSION,
+    meta.update({"vision_model": model, "vision_v": VISION_VERSION,
                  "described_at": int(time.time()), "method": "vision+ocr" if ocr else "vision"})
     text = desc + (f"\n\nPeople: {', '.join(people)}" if people else "")
     text += f"\n\nText in photo: {ocr}" if ocr else ""
@@ -389,8 +398,9 @@ def _describe_one(store, node, guard, http, prepare, scratch, faces=None):
     except Exception:
         return "failed"
     try:
-        r = http(f"{U.OLLAMA_HOST}/api/generate", {
-            "model": VISION_MODEL, "prompt": _prompt(people), "stream": False,
+        host, model = _vision_backend()
+        r = http(f"{host}/api/generate", {
+            "model": model, "prompt": _prompt(people), "stream": False,
             "images": [base64.b64encode(img).decode()],
             "options": {"num_predict": 120, "temperature": 0.2}})
         desc = clean(r.get("response"))
@@ -402,7 +412,7 @@ def _describe_one(store, node, guard, http, prepare, scratch, faces=None):
         return "rejected"
     if not desc:
         return "failed"
-    store.upsert_node(_merge(node, desc, people))
+    store.upsert_node(_merge(node, desc, people, model=model))
     return "described"
 
 

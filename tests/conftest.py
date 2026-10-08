@@ -36,3 +36,9 @@ def _private_budget(monkeypatch, tmp_path):
 def _no_real_photo_busy_flag(monkeypatch, tmp_path):
     """The live kg-photo-vision busy flag must not leak into tests (it pauses Ollama)."""
     monkeypatch.setattr("atlas.understanding.PHOTO_ACTIVE_FLAG", str(tmp_path / "no-photo-run"))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ares_llm(monkeypatch):
+    """Tests never probe the live ARES Ollama; a test opts in by patching _ares_up."""
+    monkeypatch.setattr("atlas.understanding._ares_up", lambda: False)

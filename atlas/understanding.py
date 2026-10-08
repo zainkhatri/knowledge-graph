@@ -2,7 +2,13 @@ import os, json, urllib.request, urllib.error
 from .redact import redact
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://192.168.20.51:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q5_K_M")   # EROS GTX 1070 fallback
+# Primary local LLM: ARES's RTX 3080 (ollama-ares.service). Off while VM 200/300 has the GPU.
+LOCAL_LLM_HOST = os.getenv("KG_LOCAL_LLM_HOST", "http://127.0.0.1:11435")
+LOCAL_LLM_MODEL = os.getenv("KG_LOCAL_LLM_MODEL", "qwen2.5vl:7b")   # text+vision, 5.4 GB: fits beside CLIP
+LOCAL_LLM_CTX = 8192          # gemma3:12b (8.7 GB) spilled 17% to CPU beside CLIP: 203 s/summary vs 2-5 s
+EROS_LLM_CTX = 4096
+LLM_TIMEOUT = 180
 GPU_LOAN_FLAG = os.getenv("GPU_LOAN_FLAG",
                           "/mnt/nvme/PROMETHEUS/PROJECTS/ARES-DASHBOARD/.gpu-on-loan")
 
@@ -28,7 +34,7 @@ def build_prompt(node, children_understandings):
 
 def _http_post(url, data):
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as r:
         return json.loads(r.read().decode())
 
 def build_chat_prompt(asks):
@@ -79,14 +85,48 @@ PRICE_OUT_PER_M = float(os.getenv("KG_PRICE_OUT_PER_M", "0.40"))
 
 # Ollama (small local model) times out on long digests; OpenRouter models take the full one.
 OPENROUTER_DIGEST_CHARS = 24000
-OLLAMA_DIGEST_CHARS = int(os.getenv("KG_OLLAMA_DIGEST_CHARS", "6000"))
+OLLAMA_DIGEST_CHARS = int(os.getenv("KG_OLLAMA_DIGEST_CHARS", "6000"))      # EROS 7B
+LOCAL_DIGEST_CHARS = 16000                                                    # ARES 7B, 8K ctx
 # kg-photo-vision.sh writes its PID here while gemma3 holds EROS's GPU (2026-10-07: Ollama
 # summaries attempted during photo runs failed ~5 of 6 and burned the daily call cap).
 PHOTO_ACTIVE_FLAG = os.getenv("KG_PHOTO_ACTIVE_FLAG", "/run/kg-photo-vision.active")
 
 
+_ares_state = {"t": 0.0, "up": False}
+
+
+def _ares_up():
+    """Is ARES's local Ollama (RTX 3080) reachable? Cached 30 s; never while the GPU is on loan."""
+    import time
+    if gpu_on_loan():
+        return False
+    now = time.time()
+    if now - _ares_state["t"] < 30:
+        return _ares_state["up"]
+    try:
+        with urllib.request.urlopen(LOCAL_LLM_HOST + "/api/version", timeout=1) as r:
+            up = r.status == 200
+    except Exception:
+        up = False
+    _ares_state.update(t=now, up=up)
+    return up
+
+
+def _local_backends():
+    """(host, model, num_ctx) in preference order: ARES 3080 first, EROS 1070 fallback.
+    EROS is skipped while a photo run holds its GPU; ARES while VM 200/300 has the 3080."""
+    out = []
+    if not gpu_on_loan() and _ares_up():
+        out.append((LOCAL_LLM_HOST, LOCAL_LLM_MODEL, LOCAL_LLM_CTX))
+    if not photo_vision_busy():
+        out.append((OLLAMA_HOST, OLLAMA_MODEL, EROS_LLM_CTX))
+    return out
+
+
 def digest_chars():
-    return OPENROUTER_DIGEST_CHARS if openrouter_key() else OLLAMA_DIGEST_CHARS
+    if openrouter_key():
+        return OPENROUTER_DIGEST_CHARS
+    return LOCAL_DIGEST_CHARS if (not gpu_on_loan() and _ares_up()) else OLLAMA_DIGEST_CHARS
 
 
 def photo_vision_busy():
@@ -133,20 +173,24 @@ def llm(prompt, max_tokens=400, http=None):
             except Exception:
                 continue
         return None
-    if gpu_on_loan() or photo_vision_busy():
-        return None                     # GPU busy: leave it raw, a later run retries
-    if not budget.can_call():           # Ollama is free: only SUCCESSFUL calls are counted
+    backends = _local_backends()
+    if not backends:
+        return None                     # no local GPU free: leave it raw, a later run retries
+    if not budget.can_call():           # local models are free: only SUCCESSES are counted
         raise BudgetExceeded("atlas daily LLM budget reached")
-    payload = json.dumps({"model": OLLAMA_MODEL, "prompt": prompt,
-                          "stream": False, "options": {"temperature": 0.2}}).encode()
-    try:
-        resp = _http_post(f"{OLLAMA_HOST}/api/generate", payload)
-    except Exception:
-        return None
-    text = (resp.get("response") or "").strip() or None
-    if text:
-        budget.count_call()
-    return text
+    for host, model, ctx in backends:   # nothing leaves your machines on this path
+        payload = json.dumps({"model": model, "prompt": prompt, "stream": False,
+                              "options": {"temperature": 0.2, "num_ctx": ctx,
+                                          "num_predict": max_tokens}}).encode()
+        try:
+            resp = _http_post(f"{host}/api/generate", payload)
+        except Exception:
+            continue
+        text = (resp.get("response") or "").strip() or None
+        if text:
+            budget.count_call()
+            return text
+    return None
 
 
 def build_session_prompt(digest, title=None, cwd=None, box=None):

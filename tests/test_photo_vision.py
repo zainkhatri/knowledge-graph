@@ -442,3 +442,23 @@ def test_guard_treats_vault_lookalikes_as_vaulted(tmp_path):
     assert not g.allowed(twin) and g.allowed(other)
     g2 = PV.VaultGuard(vi, ch, photos_root=root, lookalikes=str(tmp_path / "missing.json"))
     assert g2.allowed(twin)                                   # no sweep yet: unchanged behaviour
+
+
+def test_photos_go_to_ares_12b_when_up_else_eros_4b(tmp_path, monkeypatch):
+    from atlas import understanding as U
+    root = str(tmp_path / "PHOTOS")
+    a = _write(root, "2024/a.jpg"); b = _write(root, "2024/b.jpg")
+    st = Store(str(tmp_path / "kg.db"))
+    _node(st, a); _node(st, b)
+    g = _guard(tmp_path, root, vaulted=["x/zzz.jpg"])
+    seen = []
+    def spy(url, payload):
+        seen.append((url, payload["model"])); return {"response": "A dog on a beach at sunset."}
+    up = iter([True, False])
+    monkeypatch.setattr(U, "_ares_up", lambda: next(up, False))
+    PV.describe_pending(st, root, g, http=spy, prepare=_ident, gpu_free=lambda: True)
+    assert seen[0] == (U.LOCAL_LLM_HOST + "/api/generate", PV.LOCAL_VISION_MODEL)
+    assert seen[1] == (U.OLLAMA_HOST + "/api/generate", PV.VISION_MODEL)
+    models = sorted(st.get_node("ARES:" + p)["meta"]["vision_model"] for p in (a, b))
+    assert models == sorted([PV.LOCAL_VISION_MODEL, PV.VISION_MODEL])
+    st.close()

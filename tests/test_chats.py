@@ -62,11 +62,12 @@ def test_summarize_pending_gpu_on_loan_skips_entirely(tmp_path, monkeypatch):
     _seed_raw_chat(st, "ARES:chat/1", ["fix the caddy config"])
     monkeypatch.setattr("atlas.understanding.gpu_on_loan", lambda: True)
     monkeypatch.setattr("atlas.understanding.openrouter_key", lambda: None)   # local Ollama path
+    monkeypatch.setattr("atlas.understanding.photo_vision_busy", lambda: True)  # EROS busy too
     called = {"n": 0}
     def embed_fn(text, http=None):
         called["n"] += 1; return [1.0]
     res = summarize_pending(st, budget=10, embed_fn=embed_fn)
-    assert res == {"summarized": 0, "note": "gpu-on-loan"}
+    assert res == {"summarized": 0, "note": "no LLM available"}
     assert called["n"] == 0
     st.close()
 

@@ -216,8 +216,8 @@ def summarize_pending(store, budget=500, kinds=("chat", "gpt-chat", "claude-chat
     from . import understanding as U
     from . import embeddings as E
     embed_fn = embed_fn or E.embed
-    if not U.openrouter_key() and U.gpu_on_loan():
-        return {"summarized": 0, "note": "gpu-on-loan"}
+    if not U.openrouter_key() and not U._local_backends():
+        return {"summarized": 0, "note": "no LLM available"}
     ph = ",".join("?" * len(kinds))
     rows = store.db.execute(
         f"SELECT id, name, path, meta, kind FROM nodes WHERE status='raw' AND kind IN ({ph})"
